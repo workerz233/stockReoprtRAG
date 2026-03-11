@@ -1,0 +1,3 @@
+BASE_URL="https://api.zhizengzeng.com/v1"
+LLM_API_KEY="sk-zk2cc5a0113992e16fbe97980f67c4504da69a7fd762cfc2"
+MODEL_NAME="deepseek-chat"

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Research RAG</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="panel sidebar">
+        <div class="panel-header">
+          <p class="eyebrow">Projects</p>
+          <h1>券商研报 RAG</h1>
+        </div>
+        <div class="project-create">
+          <input id="projectNameInput" type="text" placeholder="输入项目名，例如 catl" />
+          <button id="createProjectBtn">创建项目</button>
+        </div>
+        <div id="projectList" class="project-list"></div>
+      </aside>
+
+      <main class="panel chat-panel">
+        <div class="panel-header chat-header">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h2 id="activeProjectName">未选择项目</h2>
+          </div>
+          <div class="chat-header-actions">
+            <span class="status-pill" id="projectStatus">请选择左侧项目</span>
+            <button id="toggleUploadPanelBtn" class="ghost-button" type="button">隐藏上传栏</button>
+          </div>
+        </div>
+
+        <div class="conversation-toolbar">
+          <div class="conversation-toolbar-header">
+            <div>
+              <p class="eyebrow">Conversations</p>
+              <h3>历史对话</h3>
+            </div>
+            <button id="newConversationBtn" class="ghost-button" type="button">新建对话</button>
+          </div>
+          <div id="conversationList" class="conversation-list"></div>
+        </div>
+
+        <div id="chatMessages" class="chat-messages">
+          <div class="message assistant">
+            <div class="bubble">
+              选择项目后即可提问，例如“宁德时代未来三年的 EPS 预测是多少？”
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-bar">
+          <textarea
+            id="chatInput"
+            rows="3"
+            placeholder="请输入问题，系统会只基于当前项目中的研报内容回答"
+          ></textarea>
+          <button id="sendChatBtn">发送</button>
+        </div>
+      </main>
+
+      <aside id="uploadPanel" class="panel upload-panel">
+        <div class="panel-header upload-header">
+          <div>
+            <p class="eyebrow">Ingestion</p>
+            <h2>上传研报 PDF</h2>
+          </div>
+          <button id="hideUploadPanelBtn" class="ghost-button icon-button" type="button">收起</button>
+        </div>
+        <div class="upload-panel-body">
+          <input id="pdfInput" type="file" accept="application/pdf" />
+          <button id="uploadPdfBtn">上传并索引</button>
+          <div id="uploadStatus" class="upload-status">等待上传</div>
+
+          <div class="tips-card">
+            <h3>使用说明</h3>
+            <p>1. 左侧创建或选择项目。</p>
+            <p>2. 右侧上传 PDF，系统会自动解析并构建向量库。</p>
+            <p>3. 中间输入问题，进行项目内问答。</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

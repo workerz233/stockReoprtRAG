@@ -1,0 +1,576 @@
+:root {
+  --bg: #f4efe6;
+  --panel: rgba(255, 250, 242, 0.88);
+  --panel-strong: #fff9f1;
+  --line: rgba(45, 32, 18, 0.12);
+  --text: #2c2117;
+  --muted: #73614f;
+  --accent: #aa4d2f;
+  --accent-strong: #7c2e19;
+  --user: #efe1cd;
+  --assistant: #fffdf9;
+  --shadow: 0 20px 60px rgba(72, 48, 29, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(226, 161, 93, 0.26), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(170, 77, 47, 0.18), transparent 28%),
+    linear-gradient(135deg, #f6f0e8, #ece2d2 48%, #f8f2ea);
+}
+
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  height: 100vh;
+  padding: 20px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.sidebar {
+  flex: 0 0 280px;
+  margin-right: 20px;
+}
+
+.chat-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 20px;
+}
+
+.upload-panel {
+  flex: 0 0 320px;
+  width: 320px;
+  transition:
+    width 220ms ease,
+    opacity 220ms ease,
+    transform 220ms ease,
+    margin 220ms ease,
+    border-color 220ms ease;
+}
+
+.app-shell.upload-panel-hidden .chat-panel {
+  margin-right: 0;
+}
+
+.app-shell.upload-panel-hidden .upload-panel {
+  width: 0;
+  flex-basis: 0;
+  opacity: 0;
+  transform: translateX(20px);
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.panel-header {
+  padding: 24px 24px 16px;
+}
+
+.panel-header h1,
+.panel-header h2,
+.conversation-toolbar h3,
+.tips-card h3 {
+  margin: 0;
+  font-family: "STSong", "Songti SC", serif;
+  font-weight: 700;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.project-create,
+.upload-panel-body {
+  padding: 0 24px 24px;
+}
+
+input,
+textarea,
+button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  font: inherit;
+}
+
+input,
+textarea {
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 90px;
+}
+
+button {
+  padding: 14px 16px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #fff8f3;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    border-color 180ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+.ghost-button {
+  width: auto;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--text);
+}
+
+.ghost-button:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.icon-button {
+  padding-inline: 16px;
+}
+
+.project-create {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-list,
+.chat-messages,
+.upload-panel-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.project-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 24px 24px;
+}
+
+.project-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: start;
+}
+
+.project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.project-delete-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(170, 77, 47, 0.08);
+  color: var(--accent-strong);
+}
+
+.project-delete-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.project-delete-btn:hover {
+  background: rgba(170, 77, 47, 0.16);
+}
+
+.project-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.project-item.active {
+  border-color: rgba(170, 77, 47, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(170, 77, 47, 0.18);
+}
+
+.project-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.project-item-count {
+  min-width: 22px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(170, 77, 47, 0.1);
+  font-size: 12px;
+  text-align: center;
+}
+
+.document-list {
+  margin-left: 14px;
+  padding-left: 14px;
+  border-left: 1px solid rgba(170, 77, 47, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: start;
+}
+
+.document-item,
+.document-empty {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.document-item {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.document-delete-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(170, 77, 47, 0.08);
+  color: var(--accent-strong);
+}
+
+.document-delete-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.document-delete-btn:hover {
+  background: rgba(170, 77, 47, 0.16);
+}
+
+.document-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.chat-header,
+.upload-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.status-pill {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(170, 77, 47, 0.08);
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.conversation-toolbar {
+  padding: 0 24px 16px;
+}
+
+.conversation-toolbar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.conversation-list {
+  display: flex;
+  gap: 10px;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.conversation-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  min-width: 220px;
+  flex: 0 0 auto;
+}
+
+.conversation-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  text-align: left;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.conversation-item.active {
+  border-color: rgba(170, 77, 47, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(170, 77, 47, 0.18);
+}
+
+.conversation-item-title,
+.conversation-item-meta {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item-title {
+  font-weight: 700;
+}
+
+.conversation-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.conversation-delete-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(170, 77, 47, 0.08);
+  color: var(--accent-strong);
+}
+
+.conversation-delete-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.conversation-delete-btn:hover {
+  background: rgba(170, 77, 47, 0.16);
+}
+
+.conversation-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.conversation-empty {
+  min-width: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-messages {
+  flex: 1 1 auto;
+  padding: 0 24px 24px;
+}
+
+.message {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+
+.message.user {
+  align-items: flex-end;
+}
+
+.bubble {
+  max-width: 88%;
+  padding: 16px 18px;
+  border-radius: 20px;
+  line-height: 1.6;
+  border: 1px solid var(--line);
+}
+
+.message.user .bubble {
+  background: var(--user);
+}
+
+.message.assistant .bubble {
+  background: var(--assistant);
+}
+
+.sources {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-item {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-input-bar {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 12px;
+  padding: 0 24px 24px;
+}
+
+.upload-panel-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-status,
+.tips-card,
+.empty-state {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+@media (max-width: 1180px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    gap: 20px;
+  }
+
+  .sidebar,
+  .chat-panel,
+  .upload-panel,
+  .app-shell.upload-panel-hidden .chat-panel {
+    margin-right: 0;
+    width: auto;
+  }
+
+  .upload-panel,
+  .app-shell.upload-panel-hidden .upload-panel {
+    flex-basis: auto;
+    transform: none;
+    border-color: var(--line);
+  }
+
+  .upload-panel {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app-shell.upload-panel-hidden .upload-panel {
+    display: none;
+  }
+
+  .project-list,
+  .chat-messages,
+  .upload-panel-body {
+    overflow: visible;
+  }
+
+  .chat-header,
+  .chat-header-actions,
+  .conversation-toolbar-header,
+  .upload-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-input-bar {
+    grid-template-columns: 1fr;
+  }
+}
