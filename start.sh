@@ -91,6 +91,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from backend.dev_proxy import iter_response_chunks, iter_ndjson_lines, write_chunked_body
+
 frontend_dir = Path(os.environ["PROJECT_ROOT"]) / "frontend"
 backend_host = os.environ.get("BACKEND_HOST", "127.0.0.1")
 backend_port = int(os.environ.get("BACKEND_PORT", "8000"))
@@ -99,11 +101,16 @@ frontend_port = int(os.environ.get("FRONTEND_PORT", "3000"))
 
 
 class FrontendHandler(SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
     def _should_proxy(self):
         return self.path.startswith("/api/") or self.path == "/api/projects" or self.path.startswith("/static/")
+
+    def _is_streaming_request(self, parsed):
+        return self.command == "POST" and parsed.path.endswith("/chat/stream")
 
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
@@ -154,15 +161,22 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             response = connection.getresponse()
 
             self.send_response(response.status, response.reason)
+            if self._is_streaming_request(parsed):
+                self.send_header("Content-Type", response.getheader("Content-Type", "application/x-ndjson"))
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                write_chunked_body(self.wfile, iter_ndjson_lines(response))
+                self.wfile.flush()
+                self.close_connection = True
+                return
+
             for key, value in response.getheaders():
                 if key.lower() in {"transfer-encoding", "connection", "server", "date"}:
                     continue
                 self.send_header(key, value)
             self.end_headers()
-            while True:
-                chunk = response.read(8192)
-                if not chunk:
-                    break
+            for chunk in iter_response_chunks(response):
                 self.wfile.write(chunk)
                 self.wfile.flush()
         finally:
