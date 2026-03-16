@@ -10,6 +10,30 @@ class FakeCompletions:
 
     def create(self, **kwargs):
         self.last_kwargs = kwargs
+        if kwargs.get("stream"):
+            return [
+                types.SimpleNamespace(
+                    choices=[
+                        types.SimpleNamespace(
+                            delta=types.SimpleNamespace(content="第一段")
+                        )
+                    ]
+                ),
+                types.SimpleNamespace(
+                    choices=[
+                        types.SimpleNamespace(
+                            delta=types.SimpleNamespace(content="")
+                        )
+                    ]
+                ),
+                types.SimpleNamespace(
+                    choices=[
+                        types.SimpleNamespace(
+                            delta=types.SimpleNamespace(content="第二段")
+                        )
+                    ]
+                ),
+            ]
         message = types.SimpleNamespace(content="  好的回答  ")
         choice = types.SimpleNamespace(message=message)
         return types.SimpleNamespace(choices=[choice])
@@ -55,6 +79,18 @@ class LLMClientTests(unittest.TestCase):
             {"role": "assistant", "content": "第一答"},
             {"role": "user", "content": "第二问"},
         ])
+
+    def test_stream_answer_messages_yields_non_empty_deltas(self) -> None:
+        client = self.module.LLMClient(settings=self.settings)
+
+        chunks = list(
+            client.stream_answer_messages(
+                [{"role": "user", "content": "流式问题"}]
+            )
+        )
+
+        self.assertEqual(chunks, ["第一段", "第二段"])
+        self.assertTrue(client.client.chat.completions.last_kwargs["stream"])
 
 
 if __name__ == "__main__":

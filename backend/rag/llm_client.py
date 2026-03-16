@@ -73,6 +73,47 @@ class LLMClient:
         content = response.choices[0].message.content
         return content.strip() if content else "未生成有效回答。"
 
+    def stream_answer_messages(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    ):
+        """Stream answer deltas for a multi-turn message list."""
+        if not self.settings.api_key and not self._is_local_endpoint():
+            raise RuntimeError(
+                "LLM API key is missing. Set `LLM_API_KEY` "
+                "(or `OPENAI_API_KEY` / `ZHIZENGZENG_API_KEY`) in your environment or `.env`."
+            )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.settings.model_name,
+                messages=[{"role": "system", "content": system_prompt}, *messages],
+                temperature=0.2,
+                stream=True,
+            )
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except AuthenticationError as exc:  # pragma: no cover - depends on external LLM endpoint
+            logger.exception("LLM authentication failed.")
+            raise RuntimeError(
+                "LLM authentication failed. Check `LLM_API_KEY` "
+                "(or `OPENAI_API_KEY` / `ZHIZENGZENG_API_KEY`) and ensure it matches "
+                f"the provider at {self.settings.base_url}."
+            ) from exc
+        except BadRequestError as exc:  # pragma: no cover - depends on external LLM endpoint
+            logger.exception("LLM request was rejected.")
+            raise RuntimeError(
+                f"LLM request was rejected by {self.settings.base_url}: {exc}"
+            ) from exc
+        except Exception as exc:  # pragma: no cover - depends on external LLM endpoint
+            logger.exception("LLM generation failed.")
+            raise RuntimeError(
+                f"LLM request failed. Ensure the OpenAI-compatible service is available at {self.settings.base_url}."
+            ) from exc
+
     def _is_local_endpoint(self) -> bool:
         """Return whether the configured endpoint points to a local server."""
         parsed = urlparse(self.settings.base_url)
