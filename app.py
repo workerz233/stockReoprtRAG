@@ -56,7 +56,7 @@ async def unhandled_exception_handler(_, exc: Exception) -> JSONResponse:
 @app.get("/")
 async def index() -> FileResponse:
     """Serve the frontend entry page."""
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/projects")

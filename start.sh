@@ -106,6 +106,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def _should_proxy(self):
         return self.path.startswith("/api/") or self.path == "/api/projects" or self.path.startswith("/static/")
 

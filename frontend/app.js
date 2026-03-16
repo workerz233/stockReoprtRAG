@@ -465,13 +465,7 @@ function appendStreamingAssistantMessage() {
   return messageRef;
 }
 
-async function readNdjsonStream(response, handlers) {
-  if (!response.body) {
-    throw new Error("当前浏览器不支持流式响应。");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+function createNdjsonProcessor(handlers) {
   let buffer = "";
   let completed = false;
 
@@ -504,26 +498,75 @@ async function readNdjsonStream(response, handlers) {
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+  return {
+    push(text) {
+      buffer += text;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(handleLine);
+    },
+    finish() {
+      if (buffer.trim()) {
+        handleLine(buffer);
+      }
+      if (!completed) {
+        throw new Error("流式响应提前结束。");
+      }
+    },
+  };
+}
 
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    lines.forEach(handleLine);
+async function streamNdjsonRequest(url, payload, handlers) {
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const processor = createNdjsonProcessor(handlers);
+    let lastOffset = 0;
 
-    if (done) {
-      break;
-    }
-  }
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json");
 
-  if (buffer.trim()) {
-    handleLine(buffer);
-  }
+    xhr.onprogress = () => {
+      const chunk = xhr.responseText.slice(lastOffset);
+      lastOffset = xhr.responseText.length;
+      if (chunk) {
+        try {
+          processor.push(chunk);
+        } catch (error) {
+          xhr.abort();
+          reject(error);
+        }
+      }
+    };
 
-  if (!completed) {
-    throw new Error("流式响应提前结束。");
-  }
+    xhr.onload = () => {
+      try {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const data = JSON.parse(xhr.responseText || "{}");
+          reject(new Error(data.detail || "请求失败"));
+          return;
+        }
+        const chunk = xhr.responseText.slice(lastOffset);
+        lastOffset = xhr.responseText.length;
+        if (chunk) {
+          processor.push(chunk);
+        }
+        processor.finish();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("网络请求失败"));
+    };
+
+    xhr.onabort = () => {
+      reject(new Error("流式请求已中断"));
+    };
+
+    xhr.send(JSON.stringify(payload));
+  });
 }
 
 async function loadProjects() {
@@ -796,30 +839,17 @@ async function sendMessage() {
       return;
     }
     streamState.scheduled = true;
-    requestAnimationFrame(() => {
+    window.setTimeout(() => {
       streamState.scheduled = false;
       flushAssistantMessage(true);
-    });
+    }, 16);
   };
 
   try {
-    const response = await fetch(
+    await streamNdjsonRequest(
       `/api/projects/${encodeURIComponent(state.activeProject)}/chat/stream`,
+      { query, conversation_id: conversationId },
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query, conversation_id: conversationId }),
-      }
-    );
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || "请求失败");
-    }
-
-    await readNdjsonStream(response, {
       onStart(event) {
         state.activeConversationId = event.conversation_id || conversationId;
         renderConversations();
