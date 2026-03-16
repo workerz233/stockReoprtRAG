@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -194,6 +195,28 @@ async def chat(project_name: str, payload: ChatRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/projects/{project_name}/chat/stream")
+async def stream_chat(project_name: str, payload: ChatRequest) -> StreamingResponse:
+    """Stream a question answer against a project's indexed reports."""
+
+    def event_stream():
+        try:
+            for event in pipeline.stream_answer_question(
+                project_name=project_name,
+                query=payload.query,
+                conversation_id=payload.conversation_id,
+            ):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        except FileNotFoundError as exc:
+            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
+        except ValueError as exc:
+            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
+        except RuntimeError as exc:
+            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 if __name__ == "__main__":
