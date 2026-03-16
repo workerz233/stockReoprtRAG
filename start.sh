@@ -152,7 +152,6 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         try:
             connection.request(self.command, target, body=body, headers=headers)
             response = connection.getresponse()
-            data = response.read()
 
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
@@ -160,7 +159,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     continue
                 self.send_header(key, value)
             self.end_headers()
-            self.wfile.write(data)
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
         finally:
             connection.close()
 

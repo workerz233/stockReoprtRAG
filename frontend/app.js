@@ -9,6 +9,7 @@ const state = {
   deletingDocuments: {},
   deletingConversations: {},
   uploadPanelHidden: false,
+  isSendingChat: false,
 };
 
 const appShellEl = document.querySelector(".app-shell");
@@ -45,6 +46,82 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderChatComposer() {
+  const disabled = !state.activeProject || state.isSendingChat;
+  chatInputEl.disabled = disabled;
+  sendChatBtnEl.disabled = disabled;
+  if (!state.activeProject) {
+    chatInputEl.placeholder = "请输入问题，系统会只基于当前项目中的研报内容回答";
+    return;
+  }
+  chatInputEl.placeholder = state.isSendingChat
+    ? "回答生成中，请稍候..."
+    : "请输入问题，系统会只基于当前项目中的研报内容回答";
+}
+
+function renderMessageContent(bubbleEl, role, text, { streaming = false } = {}) {
+  if (role === "assistant") {
+    bubbleEl.classList.add("markdown-body");
+    if (!text && streaming) {
+      bubbleEl.innerHTML = `<p class="stream-placeholder">正在生成...</p>`;
+      return;
+    }
+    const renderMarkdown =
+      typeof window.renderAssistantMarkdown === "function"
+        ? window.renderAssistantMarkdown
+        : (value) => `<p>${escapeHtml(value).replace(/\n/g, "<br />")}</p>`;
+    bubbleEl.innerHTML = renderMarkdown(text || "");
+    return;
+  }
+
+  bubbleEl.classList.remove("markdown-body");
+  bubbleEl.textContent = text || "";
+}
+
+function renderSources(sourcesEl, sources = []) {
+  if (!sources.length) {
+    sourcesEl.innerHTML = "";
+    sourcesEl.hidden = true;
+    return;
+  }
+
+  sourcesEl.hidden = false;
+  sourcesEl.innerHTML = sources
+    .slice(0, 5)
+    .map((source) => {
+      const pageLabel = source.page_no ? `第 ${source.page_no} 页` : "页码未知";
+      const scoreLabel = Number.isFinite(source.score)
+        ? ` · score ${Number(source.score).toFixed(4)}`
+        : "";
+      return `<div class="source-item"><strong>${escapeHtml(source.report_name)}</strong> · ${escapeHtml(source.section_path || "未命名章节")} · ${pageLabel}${scoreLabel}</div>`;
+    })
+    .join("");
+}
+
+function createMessageElement(role, text, sources = [], options = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `message ${role}${options.streaming ? " streaming" : ""}`;
+
+  const bubbleEl = document.createElement("div");
+  bubbleEl.className = "bubble";
+  renderMessageContent(bubbleEl, role, text, options);
+
+  const sourcesEl = document.createElement("div");
+  sourcesEl.className = "sources";
+  renderSources(sourcesEl, sources);
+
+  wrapper.appendChild(bubbleEl);
+  wrapper.appendChild(sourcesEl);
+  return { wrapper, bubbleEl, sourcesEl };
+}
+
+function updateMessageElement(messageRef, role, text, sources = [], options = {}) {
+  messageRef.wrapper.classList.toggle("streaming", Boolean(options.streaming));
+  renderMessageContent(messageRef.bubbleEl, role, text, options);
+  renderSources(messageRef.sourcesEl, sources);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 }
 
 function renderUploadPanelVisibility() {
@@ -245,6 +322,7 @@ function renderConversations() {
 
 async function loadProjectDocuments(projectName, force = false) {
   if (!projectName) {
+    renderChatComposer();
     return;
   }
 
@@ -331,6 +409,7 @@ async function setActiveProject(projectName) {
   state.activeConversationId = null;
   activeProjectNameEl.textContent = projectName || "未选择项目";
   projectStatusEl.textContent = projectName ? `当前项目: ${projectName}` : "请选择左侧项目";
+  renderChatComposer();
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
@@ -373,25 +452,78 @@ async function setActiveConversation(conversationId) {
 }
 
 function appendMessage(role, text, sources = []) {
-  const wrapper = document.createElement("div");
-  wrapper.className = `message ${role}`;
-
-  const sourceHtml = sources.length
-    ? `<div class="sources">${sources
-        .slice(0, 5)
-        .map((source) => {
-          const pageLabel = source.page_no ? `第 ${source.page_no} 页` : "页码未知";
-          const scoreLabel = Number.isFinite(source.score)
-            ? ` · score ${Number(source.score).toFixed(4)}`
-            : "";
-          return `<div class="source-item"><strong>${escapeHtml(source.report_name)}</strong> · ${escapeHtml(source.section_path || "未命名章节")} · ${pageLabel}${scoreLabel}</div>`;
-        })
-        .join("")}</div>`
-    : "";
-
-  wrapper.innerHTML = `<div class="bubble">${escapeHtml(text).replace(/\n/g, "<br />")}</div>${sourceHtml}`;
-  chatMessagesEl.appendChild(wrapper);
+  const messageRef = createMessageElement(role, text, sources);
+  chatMessagesEl.appendChild(messageRef.wrapper);
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  return messageRef;
+}
+
+function appendStreamingAssistantMessage() {
+  const messageRef = createMessageElement("assistant", "", [], { streaming: true });
+  chatMessagesEl.appendChild(messageRef.wrapper);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  return messageRef;
+}
+
+async function readNdjsonStream(response, handlers) {
+  if (!response.body) {
+    throw new Error("当前浏览器不支持流式响应。");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = false;
+
+  const handleLine = (line) => {
+    const payload = line.trim();
+    if (!payload) {
+      return;
+    }
+    const event = JSON.parse(payload);
+    if (event.type === "start") {
+      handlers.onStart?.(event);
+      return;
+    }
+    if (event.type === "delta") {
+      handlers.onDelta?.(event);
+      return;
+    }
+    if (event.type === "sources") {
+      handlers.onSources?.(event);
+      return;
+    }
+    if (event.type === "done") {
+      completed = true;
+      handlers.onDone?.(event);
+      return;
+    }
+    if (event.type === "error") {
+      completed = true;
+      throw new Error(event.error || "流式请求失败");
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    lines.forEach(handleLine);
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim()) {
+    handleLine(buffer);
+  }
+
+  if (!completed) {
+    throw new Error("流式响应提前结束。");
+  }
 }
 
 async function loadProjects() {
@@ -417,6 +549,7 @@ function clearProjectSelection() {
   state.activeConversationId = null;
   activeProjectNameEl.textContent = "未选择项目";
   projectStatusEl.textContent = "请选择左侧项目";
+  renderChatComposer();
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
@@ -640,12 +773,38 @@ async function sendMessage() {
     return;
   }
 
+  state.isSendingChat = true;
+  renderChatComposer();
   appendMessage("user", query);
   chatInputEl.value = "";
+  const assistantMessage = appendStreamingAssistantMessage();
+  const streamState = {
+    answer: "",
+    sources: [],
+    scheduled: false,
+  };
+  let streamCompleted = false;
+
+  const flushAssistantMessage = (streaming) => {
+    updateMessageElement(assistantMessage, "assistant", streamState.answer, streamState.sources, {
+      streaming,
+    });
+  };
+
+  const scheduleAssistantRender = () => {
+    if (streamState.scheduled) {
+      return;
+    }
+    streamState.scheduled = true;
+    requestAnimationFrame(() => {
+      streamState.scheduled = false;
+      flushAssistantMessage(true);
+    });
+  };
 
   try {
-    const data = await requestJson(
-      `/api/projects/${encodeURIComponent(state.activeProject)}/chat`,
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/chat/stream`,
       {
         method: "POST",
         headers: {
@@ -655,12 +814,47 @@ async function sendMessage() {
       }
     );
 
-    state.activeConversationId = data.conversation_id || conversationId;
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || "请求失败");
+    }
+
+    await readNdjsonStream(response, {
+      onStart(event) {
+        state.activeConversationId = event.conversation_id || conversationId;
+        renderConversations();
+      },
+      onDelta(event) {
+        streamState.answer += event.delta || "";
+        scheduleAssistantRender();
+      },
+      onSources(event) {
+        streamState.sources = event.sources || [];
+      },
+      onDone(event) {
+        state.activeConversationId = event.conversation_id || conversationId;
+        if (typeof event.answer === "string") {
+          streamState.answer = event.answer;
+        }
+        streamCompleted = true;
+        flushAssistantMessage(false);
+      },
+    });
+
     renderConversations();
     await loadConversationDetail(state.activeProject, state.activeConversationId, true);
     await loadConversations(state.activeProject, true);
   } catch (error) {
-    appendMessage("assistant", `请求失败：${error.message}`);
+    if (streamCompleted) {
+      appendMessage("assistant", `刷新历史失败：${error.message}`);
+    } else {
+      updateMessageElement(assistantMessage, "assistant", `请求失败：${error.message}`, [], {
+        streaming: false,
+      });
+    }
+  } finally {
+    state.isSendingChat = false;
+    renderChatComposer();
   }
 }
 
@@ -701,6 +895,7 @@ chatInputEl.addEventListener("keydown", (event) => {
 
 renderUploadPanelVisibility();
 renderConversations();
+renderChatComposer();
 
 loadProjects().catch((error) => {
   appendMessage("assistant", `初始化失败：${error.message}`);
