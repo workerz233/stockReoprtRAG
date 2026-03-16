@@ -28,6 +28,12 @@ class FakeLLMClient:
         self.last_messages = messages
         return "基于证据的回答"
 
+    def stream_answer_messages(self, messages):
+        self.last_messages = messages
+        yield "基于"
+        yield "证据"
+        yield "的回答"
+
 
 class FakeConversationManager:
     def __init__(self) -> None:
@@ -89,6 +95,32 @@ class PipelineConversationTests(unittest.TestCase):
         self.assertEqual(result["answer"], "基于证据的回答")
         self.assertEqual([message["role"] for message in pipeline.llm_client.last_messages[:2]], ["user", "assistant"])
         self.assertIn("这一轮问题", pipeline.llm_client.last_messages[-1]["content"])
+        self.assertEqual(pipeline.conversation_manager.appended[0][2]["content"], "这一轮问题")
+        self.assertEqual(pipeline.conversation_manager.appended[1][2]["content"], "基于证据的回答")
+
+    def test_stream_answer_question_emits_events_and_persists_only_after_completion(self) -> None:
+        pipeline = self.module.ResearchRAGPipeline.__new__(self.module.ResearchRAGPipeline)
+        pipeline.settings = types.SimpleNamespace(milvus_db_name="milvus.db", conversation_history_messages=6)
+        pipeline.retriever = FakeRetriever()
+        pipeline.llm_client = FakeLLMClient()
+        pipeline.conversation_manager = FakeConversationManager()
+
+        stream = pipeline.stream_answer_question("demo", "这一轮问题", conversation_id="conv-1")
+
+        first_event = next(stream)
+        self.assertEqual(first_event["type"], "start")
+        self.assertEqual(first_event["conversation_id"], "conv-1")
+        self.assertEqual(pipeline.conversation_manager.appended, [])
+
+        remaining_events = list(stream)
+        self.assertEqual(
+            [event["type"] for event in remaining_events],
+            ["delta", "delta", "delta", "sources", "done"],
+        )
+        self.assertEqual(
+            "".join(event["delta"] for event in remaining_events if event["type"] == "delta"),
+            "基于证据的回答",
+        )
         self.assertEqual(pipeline.conversation_manager.appended[0][2]["content"], "这一轮问题")
         self.assertEqual(pipeline.conversation_manager.appended[1][2]["content"], "基于证据的回答")
 
