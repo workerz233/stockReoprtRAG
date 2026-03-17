@@ -62,7 +62,7 @@ class IntentRouter:
             name=self.settings.embedding_model,
             base_url=embedding_base_url,
         )
-        return SemanticRouter(encoder=encoder, routes=routes)
+        return SemanticRouter(encoder=encoder, routes=routes, auto_sync="local")
 
     def _load_route_definitions(self) -> list[object]:
         payload = json.loads(self.route_config_path.read_text(encoding="utf-8"))

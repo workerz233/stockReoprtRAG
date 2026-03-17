@@ -15,9 +15,10 @@ class FakeRoute:
 
 
 class FakeSemanticRouter:
-    def __init__(self, encoder, routes) -> None:
+    def __init__(self, encoder, routes, auto_sync=None) -> None:
         self.encoder = encoder
         self.routes = routes
+        self.auto_sync = auto_sync
 
     def __call__(self, text: str):
         if "总结" in text or "上文" in text:
@@ -85,6 +86,7 @@ class IntentRouterTests(unittest.TestCase):
         self.assertIsNotNone(router.router)
         self.assertEqual(router.router.encoder.name, "test-embedding")
         self.assertEqual(router.router.encoder.base_url, "http://localhost:11434")
+        self.assertEqual(router.router.auto_sync, "local")
 
     def test_route_history_summary_to_history_qa(self) -> None:
         router = self.module.IntentRouter(settings=self.settings)
