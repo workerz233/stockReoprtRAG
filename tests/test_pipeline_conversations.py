@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import sys
 import tempfile
@@ -28,11 +29,10 @@ class FakeLLMClient:
         self.last_messages = messages
         return "基于证据的回答"
 
-    def stream_answer_messages(self, messages):
+    async def stream_answer_messages(self, messages):
         self.last_messages = messages
-        yield "基于"
-        yield "证据"
-        yield "的回答"
+        for chunk in ("基于", "证据", "的回答"):
+            yield chunk
 
 
 class FakeConversationManager:
@@ -98,29 +98,30 @@ class PipelineConversationTests(unittest.TestCase):
         self.assertEqual(pipeline.conversation_manager.appended[0][2]["content"], "这一轮问题")
         self.assertEqual(pipeline.conversation_manager.appended[1][2]["content"], "基于证据的回答")
 
-    def test_stream_answer_question_emits_events_and_persists_only_after_completion(self) -> None:
+    def test_stream_answer_question_emits_final_sources_and_persists_messages(self) -> None:
         pipeline = self.module.ResearchRAGPipeline.__new__(self.module.ResearchRAGPipeline)
         pipeline.settings = types.SimpleNamespace(milvus_db_name="milvus.db", conversation_history_messages=6)
         pipeline.retriever = FakeRetriever()
         pipeline.llm_client = FakeLLMClient()
         pipeline.conversation_manager = FakeConversationManager()
 
-        stream = pipeline.stream_answer_question("demo", "这一轮问题", conversation_id="conv-1")
+        async def collect_events():
+            return [
+                event
+                async for event in pipeline.stream_answer_question(
+                    "demo",
+                    "这一轮问题",
+                    conversation_id="conv-1",
+                )
+            ]
 
-        first_event = next(stream)
-        self.assertEqual(first_event["type"], "start")
-        self.assertEqual(first_event["conversation_id"], "conv-1")
-        self.assertEqual(pipeline.conversation_manager.appended, [])
+        events = asyncio.run(collect_events())
 
-        remaining_events = list(stream)
-        self.assertEqual(
-            [event["type"] for event in remaining_events],
-            ["delta", "delta", "delta", "sources", "done"],
-        )
-        self.assertEqual(
-            "".join(event["delta"] for event in remaining_events if event["type"] == "delta"),
-            "基于证据的回答",
-        )
+        self.assertEqual(events[0]["type"], "start")
+        self.assertEqual([event["delta"] for event in events[1:-1]], ["基于", "证据", "的回答"])
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["answer"], "基于证据的回答")
+        self.assertEqual(events[-1]["sources"][0]["report_name"], "demo.pdf")
         self.assertEqual(pipeline.conversation_manager.appended[0][2]["content"], "这一轮问题")
         self.assertEqual(pipeline.conversation_manager.appended[1][2]["content"], "基于证据的回答")
 

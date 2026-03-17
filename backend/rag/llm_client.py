@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 
 from urllib.parse import urlparse
 
-from openai import AuthenticationError, BadRequestError, OpenAI
+from openai import AsyncOpenAI, AuthenticationError, BadRequestError, OpenAI
 
 from config import Settings, get_settings
 
@@ -26,6 +27,10 @@ class LLMClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.client = OpenAI(
+            base_url=self.settings.base_url,
+            api_key=self.settings.api_key or "MISSING_API_KEY",
+        )
+        self.async_client = AsyncOpenAI(
             base_url=self.settings.base_url,
             api_key=self.settings.api_key or "MISSING_API_KEY",
         )
@@ -73,26 +78,28 @@ class LLMClient:
         content = response.choices[0].message.content
         return content.strip() if content else "未生成有效回答。"
 
-    def stream_answer_messages(
+    async def stream_answer_messages(
         self,
         messages: list[dict[str, str]],
         *,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-    ):
-        """Stream answer deltas for a multi-turn message list."""
+    ) -> AsyncIterator[str]:
+        """Stream incremental answer text for a multi-turn message list."""
         if not self.settings.api_key and not self._is_local_endpoint():
             raise RuntimeError(
                 "LLM API key is missing. Set `LLM_API_KEY` "
                 "(or `OPENAI_API_KEY` / `ZHIZENGZENG_API_KEY`) in your environment or `.env`."
             )
         try:
-            response = self.client.chat.completions.create(
+            response = await self.async_client.chat.completions.create(
                 model=self.settings.model_name,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
                 temperature=0.2,
                 stream=True,
             )
-            for chunk in response:
+            async for chunk in response:
+                if not getattr(chunk, "choices", None):
+                    continue
                 delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta

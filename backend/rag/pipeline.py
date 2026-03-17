@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 import logging
 import re
 import shutil
@@ -107,14 +108,18 @@ class ResearchRAGPipeline:
             raise ValueError("Query cannot be empty.")
 
         conversation_id = self._resolve_conversation_id(project_name, conversation_id)
-        prompt, sources = self._build_prompt_and_sources(project_name, query)
-        if prompt is None:
+        history_messages = self._build_history_messages(project_name, conversation_id)
+
+        results = self.retriever.retrieve(project_name=project_name, query=query)
+        if not results:
             answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
+            sources: list[dict[str, object]] = []
         else:
-            history_messages = self._build_history_messages(project_name, conversation_id)
+            prompt = self._build_prompt(query=query, results=results)
             answer = self._strip_source_section(
                 self.llm_client.answer_messages([*history_messages, {"role": "user", "content": prompt}])
             )
+            sources = self._build_sources(results)
 
         self._persist_conversation_turn(
             project_name=project_name,
@@ -132,13 +137,13 @@ class ResearchRAGPipeline:
             response["conversation_id"] = conversation_id
         return response
 
-    def stream_answer_question(
+    async def stream_answer_question(
         self,
         project_name: str,
         query: str,
         conversation_id: str | None = None,
-    ):
-        """Stream answer events for a project chat question."""
+    ) -> AsyncIterator[dict[str, object]]:
+        """Retrieve relevant chunks and stream the answer as structured events."""
         query = query.strip()
         if not query:
             raise ValueError("Query cannot be empty.")
@@ -146,21 +151,10 @@ class ResearchRAGPipeline:
         conversation_id = self._resolve_conversation_id(project_name, conversation_id)
         yield {"type": "start", "conversation_id": conversation_id}
 
-        try:
-            prompt, sources = self._build_prompt_and_sources(project_name, query)
-            if prompt is None:
-                answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
-                yield {"type": "delta", "delta": answer}
-            else:
-                history_messages = self._build_history_messages(project_name, conversation_id)
-                answer_parts = []
-                for delta in self.llm_client.stream_answer_messages(
-                    [*history_messages, {"role": "user", "content": prompt}]
-                ):
-                    answer_parts.append(delta)
-                    yield {"type": "delta", "delta": delta}
-                answer = self._strip_source_section("".join(answer_parts))
-
+        results = self.retriever.retrieve(project_name=project_name, query=query)
+        sources = self._build_sources(results)
+        if not results:
+            answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
             self._persist_conversation_turn(
                 project_name=project_name,
                 conversation_id=conversation_id,
@@ -168,11 +162,37 @@ class ResearchRAGPipeline:
                 answer=answer,
                 sources=sources,
             )
-            yield {"type": "sources", "sources": sources}
-            yield {"type": "done", "conversation_id": conversation_id, "answer": answer}
-        except Exception as exc:
-            logger.exception("Streaming answer generation failed.")
-            yield {"type": "error", "conversation_id": conversation_id, "error": str(exc)}
+            yield {
+                "type": "done",
+                "answer": answer,
+                "sources": sources,
+                "conversation_id": conversation_id,
+            }
+            return
+
+        prompt = self._build_prompt(query=query, results=results)
+        history_messages = self._build_history_messages(project_name, conversation_id)
+        chunks: list[str] = []
+        async for delta in self.llm_client.stream_answer_messages(
+            [*history_messages, {"role": "user", "content": prompt}]
+        ):
+            chunks.append(delta)
+            yield {"type": "token", "delta": delta, "conversation_id": conversation_id}
+
+        answer = self._strip_source_section("".join(chunks)) or "未生成有效回答。"
+        self._persist_conversation_turn(
+            project_name=project_name,
+            conversation_id=conversation_id,
+            query=query,
+            answer=answer,
+            sources=sources,
+        )
+        yield {
+            "type": "done",
+            "answer": answer,
+            "sources": sources,
+            "conversation_id": conversation_id,
+        }
 
     def delete_report(self, project_name: str, report_name: str) -> dict[str, object]:
         """Delete a report's vectors and parsed markdown artifacts."""
@@ -237,6 +257,35 @@ class ResearchRAGPipeline:
                 history_messages.append({"role": role, "content": content})
         return history_messages
 
+    def _build_prompt(self, query: str, results: list[object]) -> str:
+        context = "\n\n".join(
+            [
+                (
+                    f"[证据{index}] 报告名: {result.report_name}\n"
+                    f"章节路径: {result.section_path or '未命名章节'}\n"
+                    f"页码: {self._format_page_no(result.page_no)}\n"
+                    f"块类型: {result.block_type}\n"
+                    f"内容: {result.text}"
+                )
+                for index, result in enumerate(results, start=1)
+            ]
+        )
+        return PROMPT_TEMPLATE.format(retrieved_chunks=context, query=query)
+
+    @staticmethod
+    def _build_sources(results: list[object]) -> list[dict[str, object]]:
+        return [
+            {
+                "report_name": result.report_name,
+                "section_path": result.section_path,
+                "page_no": result.page_no,
+                "score": result.score,
+                "text": result.text,
+                "block_type": result.block_type,
+            }
+            for result in results
+        ]
+
     def _persist_conversation_turn(
         self,
         *,
@@ -262,38 +311,3 @@ class ResearchRAGPipeline:
             content=answer,
             sources=sources,
         )
-
-    def _build_prompt_and_sources(
-        self,
-        project_name: str,
-        query: str,
-    ) -> tuple[str | None, list[dict[str, object]]]:
-        results = self.retriever.retrieve(project_name=project_name, query=query)
-        if not results:
-            return None, []
-
-        context = "\n\n".join(
-            [
-                (
-                    f"[证据{index}] 报告名: {result.report_name}\n"
-                    f"章节路径: {result.section_path or '未命名章节'}\n"
-                    f"页码: {self._format_page_no(result.page_no)}\n"
-                    f"块类型: {result.block_type}\n"
-                    f"内容: {result.text}"
-                )
-                for index, result in enumerate(results, start=1)
-            ]
-        )
-        prompt = PROMPT_TEMPLATE.format(retrieved_chunks=context, query=query)
-        sources = [
-            {
-                "report_name": result.report_name,
-                "section_path": result.section_path,
-                "page_no": result.page_no,
-                "score": result.score,
-                "text": result.text,
-                "block_type": result.block_type,
-            }
-            for result in results
-        ]
-        return prompt, sources

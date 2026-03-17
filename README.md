@@ -110,6 +110,42 @@ python app.py
 
 系统会只基于当前项目中已索引的研报内容回答。
 
+## 8. 离线评测
+
+项目提供了一个离线评测入口，会直接调用真实本地检索链路和真实本地模型。
+
+默认使用 `learn` conda 环境执行，可以直接运行：
+
+```bash
+./eval.sh
+```
+
+先只生成评测样本：
+
+```bash
+./eval.sh --generate-only
+```
+
+默认会扫描 `data/projects/*/parsed_markdown/**/*.md`，生成：
+
+`evals/datasets/auto_eval_cases.jsonl`
+
+也可以显式传递参数给底层评测入口：
+
+```bash
+./eval.sh --dataset evals/datasets/auto_eval_cases.jsonl
+```
+
+评测输出包括：
+
+- 检索命中率：目标报告、目标章节是否进入返回 `sources`
+- 回答要点覆盖率：回答中覆盖了多少 `expected_answer_points`
+- 拒答准确率：对于应拒答样本，是否正确回答“未找到足够依据”
+
+结果会写入：
+
+`evals/results/<timestamp>.json`
+
 ## 目录结构
 
 ```text

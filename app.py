@@ -46,6 +46,11 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
 
 
+def _format_sse_event(event_name: str, payload: dict[str, object]) -> str:
+    """Encode one SSE event frame."""
+    return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_, exc: Exception) -> JSONResponse:
     """Return consistent JSON for unexpected errors."""
@@ -56,7 +61,7 @@ async def unhandled_exception_handler(_, exc: Exception) -> JSONResponse:
 @app.get("/")
 async def index() -> FileResponse:
     """Serve the frontend entry page."""
-    return FileResponse(FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-store"})
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 @app.get("/api/projects")
@@ -181,42 +186,30 @@ async def upload_pdf(project_name: str, file: UploadFile = File(...)) -> dict[st
 
 
 @app.post("/api/projects/{project_name}/chat")
-async def chat(project_name: str, payload: ChatRequest) -> dict[str, object]:
-    """Ask a question against a project's indexed reports."""
-    try:
-        return pipeline.answer_question(
-            project_name=project_name,
-            query=payload.query,
-            conversation_id=payload.conversation_id,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+async def chat(project_name: str, payload: ChatRequest) -> StreamingResponse:
+    """Ask a question against a project's indexed reports and stream SSE events."""
 
-
-@app.post("/api/projects/{project_name}/chat/stream")
-async def stream_chat(project_name: str, payload: ChatRequest) -> StreamingResponse:
-    """Stream a question answer against a project's indexed reports."""
-
-    def event_stream():
+    async def event_stream():
         try:
-            for event in pipeline.stream_answer_question(
+            async for event in pipeline.stream_answer_question(
                 project_name=project_name,
                 query=payload.query,
                 conversation_id=payload.conversation_id,
             ):
-                yield json.dumps(event, ensure_ascii=False) + "\n"
-        except FileNotFoundError as exc:
-            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
-        except ValueError as exc:
-            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
-        except RuntimeError as exc:
-            yield json.dumps({"type": "error", "error": str(exc)}, ensure_ascii=False) + "\n"
+                event_name = str(event.get("type", "message"))
+                event_payload = {key: value for key, value in event.items() if key != "type"}
+                yield _format_sse_event(event_name, event_payload)
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            yield _format_sse_event("error", {"detail": str(exc)})
 
-    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":

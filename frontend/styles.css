@@ -530,6 +530,16 @@ button:hover {
   margin-top: 6px;
 }
 
+.markdown-body .task-list-item {
+  list-style: none;
+  margin-left: -22px;
+}
+
+.markdown-body .task-list-item input {
+  width: auto;
+  margin-right: 8px;
+}
+
 .markdown-body code {
   padding: 2px 6px;
   border-radius: 8px;

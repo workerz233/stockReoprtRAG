@@ -9,7 +9,7 @@ const state = {
   deletingDocuments: {},
   deletingConversations: {},
   uploadPanelHidden: false,
-  isSendingChat: false,
+  isSendingMessage: false,
 };
 
 const appShellEl = document.querySelector(".app-shell");
@@ -48,82 +48,6 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
-function renderChatComposer() {
-  const disabled = !state.activeProject || state.isSendingChat;
-  chatInputEl.disabled = disabled;
-  sendChatBtnEl.disabled = disabled;
-  if (!state.activeProject) {
-    chatInputEl.placeholder = "请输入问题，系统会只基于当前项目中的研报内容回答";
-    return;
-  }
-  chatInputEl.placeholder = state.isSendingChat
-    ? "回答生成中，请稍候..."
-    : "请输入问题，系统会只基于当前项目中的研报内容回答";
-}
-
-function renderMessageContent(bubbleEl, role, text, { streaming = false } = {}) {
-  if (role === "assistant") {
-    bubbleEl.classList.add("markdown-body");
-    if (!text && streaming) {
-      bubbleEl.innerHTML = `<p class="stream-placeholder">正在生成...</p>`;
-      return;
-    }
-    const renderMarkdown =
-      typeof window.renderAssistantMarkdown === "function"
-        ? window.renderAssistantMarkdown
-        : (value) => `<p>${escapeHtml(value).replace(/\n/g, "<br />")}</p>`;
-    bubbleEl.innerHTML = renderMarkdown(text || "");
-    return;
-  }
-
-  bubbleEl.classList.remove("markdown-body");
-  bubbleEl.textContent = text || "";
-}
-
-function renderSources(sourcesEl, sources = []) {
-  if (!sources.length) {
-    sourcesEl.innerHTML = "";
-    sourcesEl.hidden = true;
-    return;
-  }
-
-  sourcesEl.hidden = false;
-  sourcesEl.innerHTML = sources
-    .slice(0, 5)
-    .map((source) => {
-      const pageLabel = source.page_no ? `第 ${source.page_no} 页` : "页码未知";
-      const scoreLabel = Number.isFinite(source.score)
-        ? ` · score ${Number(source.score).toFixed(4)}`
-        : "";
-      return `<div class="source-item"><strong>${escapeHtml(source.report_name)}</strong> · ${escapeHtml(source.section_path || "未命名章节")} · ${pageLabel}${scoreLabel}</div>`;
-    })
-    .join("");
-}
-
-function createMessageElement(role, text, sources = [], options = {}) {
-  const wrapper = document.createElement("div");
-  wrapper.className = `message ${role}${options.streaming ? " streaming" : ""}`;
-
-  const bubbleEl = document.createElement("div");
-  bubbleEl.className = "bubble";
-  renderMessageContent(bubbleEl, role, text, options);
-
-  const sourcesEl = document.createElement("div");
-  sourcesEl.className = "sources";
-  renderSources(sourcesEl, sources);
-
-  wrapper.appendChild(bubbleEl);
-  wrapper.appendChild(sourcesEl);
-  return { wrapper, bubbleEl, sourcesEl };
-}
-
-function updateMessageElement(messageRef, role, text, sources = [], options = {}) {
-  messageRef.wrapper.classList.toggle("streaming", Boolean(options.streaming));
-  renderMessageContent(messageRef.bubbleEl, role, text, options);
-  renderSources(messageRef.sourcesEl, sources);
-  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-}
-
 function renderUploadPanelVisibility() {
   appShellEl.classList.toggle("upload-panel-hidden", state.uploadPanelHidden);
   uploadPanelEl.setAttribute("aria-hidden", String(state.uploadPanelHidden));
@@ -152,6 +76,45 @@ function renderConversationMessages(messages = []) {
   messages.forEach((message) => {
     appendMessage(message.role, message.content, message.sources || []);
   });
+}
+
+function renderSourcesHtml(sources = []) {
+  if (!sources.length) {
+    return "";
+  }
+
+  return `<div class="sources">${sources
+    .slice(0, 5)
+    .map((source) => {
+      const pageLabel = source.page_no ? `第 ${source.page_no} 页` : "页码未知";
+      const scoreLabel = Number.isFinite(source.score)
+        ? ` · score ${Number(source.score).toFixed(4)}`
+        : "";
+      return `<div class="source-item"><strong>${escapeHtml(source.report_name)}</strong> · ${escapeHtml(source.section_path || "未命名章节")} · ${pageLabel}${scoreLabel}</div>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderMessageBubble(role, text, options = {}) {
+  const { markdown = role === "assistant", streaming = false } = options;
+
+  if (role === "assistant" && markdown) {
+    const renderMarkdown =
+      typeof window.renderAssistantMarkdown === "function"
+        ? window.renderAssistantMarkdown
+        : (value) => `<p>${escapeHtml(value).replace(/\n/g, "<br />")}</p>`;
+    return {
+      bubbleClass: "bubble markdown-body",
+      html: !text && streaming
+        ? `<p class="stream-placeholder">正在生成...</p>`
+        : renderMarkdown(text || ""),
+    };
+  }
+
+  return {
+    bubbleClass: "bubble",
+    html: escapeHtml(text || "").replace(/\n/g, "<br />"),
+  };
 }
 
 function renderProjects() {
@@ -322,7 +285,6 @@ function renderConversations() {
 
 async function loadProjectDocuments(projectName, force = false) {
   if (!projectName) {
-    renderChatComposer();
     return;
   }
 
@@ -409,7 +371,6 @@ async function setActiveProject(projectName) {
   state.activeConversationId = null;
   activeProjectNameEl.textContent = projectName || "未选择项目";
   projectStatusEl.textContent = projectName ? `当前项目: ${projectName}` : "请选择左侧项目";
-  renderChatComposer();
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
@@ -451,122 +412,94 @@ async function setActiveConversation(conversationId) {
   }
 }
 
-function appendMessage(role, text, sources = []) {
-  const messageRef = createMessageElement(role, text, sources);
-  chatMessagesEl.appendChild(messageRef.wrapper);
+function updateMessageElement(messageEl, role, text, sources = [], options = {}) {
+  const rendered = renderMessageBubble(role, text, options);
+  messageEl.classList.toggle("streaming", Boolean(options.streaming));
+  messageEl.innerHTML = `<div class="${rendered.bubbleClass}">${rendered.html}</div>${renderSourcesHtml(sources)}`;
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-  return messageRef;
 }
 
-function appendStreamingAssistantMessage() {
-  const messageRef = createMessageElement("assistant", "", [], { streaming: true });
-  chatMessagesEl.appendChild(messageRef.wrapper);
-  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-  return messageRef;
+function appendMessage(role, text, sources = [], options = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `message ${role}`;
+  chatMessagesEl.appendChild(wrapper);
+  updateMessageElement(wrapper, role, text, sources, options);
+  return wrapper;
 }
 
-function createNdjsonProcessor(handlers) {
-  let buffer = "";
-  let completed = false;
+async function readErrorResponse(response) {
+  const data = await response.json().catch(() => null);
+  if (data?.detail) {
+    return data.detail;
+  }
 
-  const handleLine = (line) => {
-    const payload = line.trim();
-    if (!payload) {
+  const text = await response.text().catch(() => "");
+  return text || "请求失败";
+}
+
+function parseSseEventBlock(block) {
+  const lines = block.split(/\r?\n/);
+  let eventName = "message";
+  const dataLines = [];
+
+  lines.forEach((line) => {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim() || "message";
       return;
     }
-    const event = JSON.parse(payload);
-    if (event.type === "start") {
-      handlers.onStart?.(event);
-      return;
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
     }
-    if (event.type === "delta") {
-      handlers.onDelta?.(event);
-      return;
-    }
-    if (event.type === "sources") {
-      handlers.onSources?.(event);
-      return;
-    }
-    if (event.type === "done") {
-      completed = true;
-      handlers.onDone?.(event);
-      return;
-    }
-    if (event.type === "error") {
-      completed = true;
-      throw new Error(event.error || "流式请求失败");
-    }
-  };
+  });
+
+  if (!dataLines.length) {
+    return null;
+  }
 
   return {
-    push(text) {
-      buffer += text;
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      lines.forEach(handleLine);
-    },
-    finish() {
-      if (buffer.trim()) {
-        handleLine(buffer);
-      }
-      if (!completed) {
-        throw new Error("流式响应提前结束。");
-      }
-    },
+    event: eventName,
+    data: JSON.parse(dataLines.join("\n")),
   };
 }
 
-async function streamNdjsonRequest(url, payload, handlers) {
-  await new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const processor = createNdjsonProcessor(handlers);
-    let lastOffset = 0;
+async function consumeSseStream(response, handlers) {
+  if (!response.body) {
+    throw new Error("浏览器不支持流式响应");
+  }
 
-    xhr.open("POST", url, true);
-    xhr.setRequestHeader("Content-Type", "application/json");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-    xhr.onprogress = () => {
-      const chunk = xhr.responseText.slice(lastOffset);
-      lastOffset = xhr.responseText.length;
-      if (chunk) {
-        try {
-          processor.push(chunk);
-        } catch (error) {
-          xhr.abort();
-          reject(error);
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || "";
+
+    blocks.forEach((block) => {
+      const parsed = parseSseEventBlock(block);
+      if (!parsed) {
+        return;
+      }
+
+      const handler = handlers[parsed.event];
+      if (handler) {
+        handler(parsed.data);
+      }
+    });
+
+    if (done) {
+      if (buffer.trim()) {
+        const parsed = parseSseEventBlock(buffer);
+        if (parsed && handlers[parsed.event]) {
+          handlers[parsed.event](parsed.data);
         }
       }
-    };
-
-    xhr.onload = () => {
-      try {
-        if (xhr.status < 200 || xhr.status >= 300) {
-          const data = JSON.parse(xhr.responseText || "{}");
-          reject(new Error(data.detail || "请求失败"));
-          return;
-        }
-        const chunk = xhr.responseText.slice(lastOffset);
-        lastOffset = xhr.responseText.length;
-        if (chunk) {
-          processor.push(chunk);
-        }
-        processor.finish();
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
-
-    xhr.onerror = () => {
-      reject(new Error("网络请求失败"));
-    };
-
-    xhr.onabort = () => {
-      reject(new Error("流式请求已中断"));
-    };
-
-    xhr.send(JSON.stringify(payload));
-  });
+      return;
+    }
+  }
 }
 
 async function loadProjects() {
@@ -592,7 +525,6 @@ function clearProjectSelection() {
   state.activeConversationId = null;
   activeProjectNameEl.textContent = "未选择项目";
   projectStatusEl.textContent = "请选择左侧项目";
-  renderChatComposer();
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
@@ -795,6 +727,10 @@ async function deleteProject(projectName) {
 }
 
 async function sendMessage() {
+  if (state.isSendingMessage) {
+    return;
+  }
+
   if (!state.activeProject) {
     alert("请先选择项目");
     return;
@@ -816,75 +752,66 @@ async function sendMessage() {
     return;
   }
 
-  state.isSendingChat = true;
-  renderChatComposer();
   appendMessage("user", query);
   chatInputEl.value = "";
-  const assistantMessage = appendStreamingAssistantMessage();
-  const streamState = {
-    answer: "",
-    sources: [],
-    scheduled: false,
-  };
-  let streamCompleted = false;
-
-  const flushAssistantMessage = (streaming) => {
-    updateMessageElement(assistantMessage, "assistant", streamState.answer, streamState.sources, {
-      streaming,
-    });
-  };
-
-  const scheduleAssistantRender = () => {
-    if (streamState.scheduled) {
-      return;
-    }
-    streamState.scheduled = true;
-    window.setTimeout(() => {
-      streamState.scheduled = false;
-      flushAssistantMessage(true);
-    }, 16);
-  };
+  const assistantMessageEl = appendMessage("assistant", "", [], { markdown: false, streaming: true });
+  let assistantText = "";
+  let finalPayload = null;
+  state.isSendingMessage = true;
+  sendChatBtnEl.disabled = true;
 
   try {
-    await streamNdjsonRequest(
-      `/api/projects/${encodeURIComponent(state.activeProject)}/chat/stream`,
-      { query, conversation_id: conversationId },
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/chat`,
       {
-      onStart(event) {
-        state.activeConversationId = event.conversation_id || conversationId;
-        renderConversations();
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, conversation_id: conversationId }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await readErrorResponse(response));
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.startsWith("text/event-stream")) {
+      throw new Error("后端未返回 SSE 流");
+    }
+
+    await consumeSseStream(response, {
+      start(payload) {
+        state.activeConversationId = payload.conversation_id || conversationId;
       },
-      onDelta(event) {
-        streamState.answer += event.delta || "";
-        scheduleAssistantRender();
+      token(payload) {
+        assistantText += payload.delta || "";
+        updateMessageElement(assistantMessageEl, "assistant", assistantText, [], { markdown: false, streaming: true });
       },
-      onSources(event) {
-        streamState.sources = event.sources || [];
+      done(payload) {
+        finalPayload = payload;
+        assistantText = payload.answer || assistantText;
+        updateMessageElement(assistantMessageEl, "assistant", assistantText, payload.sources || [], { markdown: true });
       },
-      onDone(event) {
-        state.activeConversationId = event.conversation_id || conversationId;
-        if (typeof event.answer === "string") {
-          streamState.answer = event.answer;
-        }
-        streamCompleted = true;
-        flushAssistantMessage(false);
+      error(payload) {
+        throw new Error(payload.detail || "流式请求失败");
       },
     });
 
+    state.activeConversationId = finalPayload?.conversation_id || state.activeConversationId || conversationId;
     renderConversations();
     await loadConversationDetail(state.activeProject, state.activeConversationId, true);
     await loadConversations(state.activeProject, true);
   } catch (error) {
-    if (streamCompleted) {
-      appendMessage("assistant", `刷新历史失败：${error.message}`);
+    if (assistantText) {
+      appendMessage("assistant", `流式请求中断：${error.message}`);
     } else {
-      updateMessageElement(assistantMessage, "assistant", `请求失败：${error.message}`, [], {
-        streaming: false,
-      });
+      updateMessageElement(assistantMessageEl, "assistant", `请求失败：${error.message}`);
     }
   } finally {
-    state.isSendingChat = false;
-    renderChatComposer();
+    state.isSendingMessage = false;
+    sendChatBtnEl.disabled = false;
   }
 }
 
@@ -925,7 +852,6 @@ chatInputEl.addEventListener("keydown", (event) => {
 
 renderUploadPanelVisibility();
 renderConversations();
-renderChatComposer();
 
 loadProjects().catch((error) => {
   appendMessage("assistant", `初始化失败：${error.message}`);
