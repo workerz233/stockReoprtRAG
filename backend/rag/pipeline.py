@@ -181,7 +181,30 @@ class ResearchRAGPipeline:
         conversation_id = self._resolve_conversation_id(project_name, conversation_id)
         yield {"type": "start", "conversation_id": conversation_id}
 
-        results = self.retriever.retrieve(project_name=project_name, query=query)
+        history_messages = self._build_history_messages(project_name, conversation_id)
+        resolution = self.followup_resolver.resolve(query=query, history_messages=history_messages)
+        if resolution.needs_clarification:
+            answer = resolution.clarification_question or "我需要确认一下你指的是哪个主题。"
+            sources: list[dict[str, object]] = []
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            yield {"type": "delta", "delta": answer, "conversation_id": conversation_id}
+            yield {
+                "type": "done",
+                "answer": answer,
+                "sources": sources,
+                "conversation_id": conversation_id,
+                "resolved_query": None,
+            }
+            return
+
+        retrieval_query = resolution.resolved_query or query
+        results = self.retriever.retrieve(project_name=project_name, query=retrieval_query)
         sources = self._build_sources(results)
         if not results:
             answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
@@ -197,11 +220,11 @@ class ResearchRAGPipeline:
                 "answer": answer,
                 "sources": sources,
                 "conversation_id": conversation_id,
+                "resolved_query": retrieval_query,
             }
             return
 
-        prompt = self._build_prompt(query=query, results=results)
-        history_messages = self._build_history_messages(project_name, conversation_id)
+        prompt = self._build_prompt(query=retrieval_query, results=results)
         chunks: list[str] = []
         async for delta in self.llm_client.stream_answer_messages(
             [*history_messages, {"role": "user", "content": prompt}]
@@ -222,6 +245,7 @@ class ResearchRAGPipeline:
             "answer": answer,
             "sources": sources,
             "conversation_id": conversation_id,
+            "resolved_query": retrieval_query,
         }
 
     def delete_report(self, project_name: str, report_name: str) -> dict[str, object]:

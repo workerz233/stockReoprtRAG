@@ -170,6 +170,31 @@ class PipelineConversationTests(unittest.TestCase):
         self.assertEqual(pipeline.conversation_manager.appended[0][2]["content"], "这一轮问题")
         self.assertEqual(pipeline.conversation_manager.appended[1][2]["content"], "基于证据的回答")
 
+    def test_stream_answer_question_emits_clarification_without_retrieval(self) -> None:
+        pipeline = self.module.ResearchRAGPipeline.__new__(self.module.ResearchRAGPipeline)
+        pipeline.settings = types.SimpleNamespace(milvus_db_name="milvus.db", conversation_history_messages=6)
+        pipeline.retriever = FakeRetriever()
+        pipeline.llm_client = FakeLLMClient()
+        pipeline.conversation_manager = FakeConversationManager()
+        pipeline.followup_resolver = FakeResolver.clarification("你指的是哪篇报告？")
+
+        async def collect_events():
+            return [
+                event
+                async for event in pipeline.stream_answer_question(
+                    "demo",
+                    "它的毛利率呢",
+                    conversation_id="conv-1",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual([event["type"] for event in events], ["start", "delta", "done"])
+        self.assertEqual(events[1]["delta"], "你指的是哪篇报告？")
+        self.assertEqual(events[-1]["answer"], "你指的是哪篇报告？")
+        self.assertIsNone(pipeline.retriever.last_query)
+
     def test_answer_question_uses_resolved_query_for_retrieval(self) -> None:
         pipeline = self.module.ResearchRAGPipeline.__new__(self.module.ResearchRAGPipeline)
         pipeline.settings = types.SimpleNamespace(milvus_db_name="milvus.db", conversation_history_messages=6)
