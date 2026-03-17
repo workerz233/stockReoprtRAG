@@ -12,6 +12,7 @@ from backend.conversation_manager import ConversationManager
 from backend.project_manager import ProjectManager
 from backend.rag.chunker import DocumentChunker
 from backend.rag.embeddings import OllamaEmbeddingClient
+from backend.rag.followup_resolver import FollowupResolver
 from backend.rag.llm_client import LLMClient
 from backend.rag.markdown_processor import MarkdownProcessor
 from backend.rag.milvus_store import MilvusStore
@@ -59,6 +60,7 @@ class ResearchRAGPipeline:
         self.embedding_client = OllamaEmbeddingClient(self.settings)
         self.retriever = MilvusRetriever(project_manager, self.embedding_client)
         self.llm_client = LLMClient(self.settings)
+        self.followup_resolver = FollowupResolver(llm_client=self.llm_client, settings=self.settings)
 
     def index_pdf(self, project_name: str, pdf_path: Path) -> dict[str, object]:
         """Parse and index a PDF into the project's Milvus Lite store."""
@@ -109,13 +111,39 @@ class ResearchRAGPipeline:
 
         conversation_id = self._resolve_conversation_id(project_name, conversation_id)
         history_messages = self._build_history_messages(project_name, conversation_id)
+        resolution = self.followup_resolver.resolve(query=query, history_messages=history_messages)
 
-        results = self.retriever.retrieve(project_name=project_name, query=query)
+        if resolution.needs_clarification:
+            answer = resolution.clarification_question or "我需要确认一下你指的是哪个主题。"
+            sources: list[dict[str, object]] = []
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            response = {
+                "type": "clarification",
+                "answer": answer,
+                "sources": sources,
+                "resolved_query": None,
+                "clarification": {
+                    "question": answer,
+                    "reason": resolution.reason,
+                },
+            }
+            if conversation_id:
+                response["conversation_id"] = conversation_id
+            return response
+
+        retrieval_query = resolution.resolved_query or query
+        results = self.retriever.retrieve(project_name=project_name, query=retrieval_query)
         if not results:
             answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
             sources: list[dict[str, object]] = []
         else:
-            prompt = self._build_prompt(query=query, results=results)
+            prompt = self._build_prompt(query=retrieval_query, results=results)
             answer = self._strip_source_section(
                 self.llm_client.answer_messages([*history_messages, {"role": "user", "content": prompt}])
             )
@@ -130,8 +158,10 @@ class ResearchRAGPipeline:
         )
 
         response = {
+            "type": "answer",
             "answer": answer,
             "sources": sources,
+            "resolved_query": retrieval_query,
         }
         if conversation_id:
             response["conversation_id"] = conversation_id
