@@ -130,6 +130,29 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(chunks, ["第一段", "第二段"])
         self.assertTrue(client.async_client.chat.completions.last_kwargs["stream"])
 
+    def test_stream_answer_messages_allows_model_override(self) -> None:
+        settings = self.module.Settings(
+            base_url="http://localhost:8001/v1",
+            model_name="main-model",
+            fast_model_name="fast-model",
+            api_key="token",
+        )
+        client = self.module.LLMClient(settings=settings)
+
+        async def collect_chunks():
+            return [
+                chunk
+                async for chunk in client.stream_answer_messages(
+                    [{"role": "user", "content": "流式问题"}],
+                    model_name="fast-model",
+                )
+            ]
+
+        chunks = asyncio.run(collect_chunks())
+
+        self.assertEqual(chunks, ["第一段", "第二段"])
+        self.assertEqual(client.async_client.chat.completions.last_kwargs["model"], "fast-model")
+
 
 if __name__ == "__main__":
     unittest.main()
