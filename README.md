@@ -53,13 +53,15 @@ cp .env.example .env
 ```env
 BASE_URL=http://localhost:8001/v1
 MODEL_NAME=qwen2.5-7b-instruct
+FAST_MODEL_NAME=glm-4.7
 LLM_API_KEY=your_api_key
 ```
 
 说明：
 
 - `BASE_URL` 必须是 OpenAI 兼容服务的根地址，通常形如 `http://host:port/v1`
-- `MODEL_NAME` 是你的本地推理服务中可用的模型名
+- `MODEL_NAME` 是最终基于检索证据生成回答时使用的主模型
+- `FAST_MODEL_NAME` 是检索前追问识别、指代补全和澄清判断使用的快模型；未配置时默认回退到 `MODEL_NAME`
 - `LLM_API_KEY` 用于远端 OpenAI 兼容服务鉴权；如果你使用本地服务，可以不填，代码会自动回退到 `EMPTY`
 - 代码中使用 `python-dotenv` 自动读取 `.env`
 
@@ -109,6 +111,16 @@ python app.py
 - `公司盈利预测是多少？`
 
 系统会只基于当前项目中已索引的研报内容回答。
+
+对于连续追问，系统会在检索前先尝试识别是否依赖最近几轮上下文，例如：
+
+- `那 2025 年呢？`
+- `它的毛利率呢？`
+- `和另一篇比呢？`
+
+高置信度时会先把问题补全成可独立检索的完整问题，再进入检索；如果系统认为指代不清，会先返回澄清问题，而不是直接误检索。
+
+当前聊天接口使用 SSE 流式返回。正常回答时，最终 `done` 事件会带上 `resolved_query` 和 `sources`；如果进入澄清分支，最终事件会带空 `sources`，并在 `clarification` 字段中说明澄清问题和原因。
 
 ## 8. 离线评测
 

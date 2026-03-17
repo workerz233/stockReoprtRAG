@@ -1,4 +1,5 @@
 import importlib
+import sys
 import tempfile
 import types
 import unittest
@@ -19,6 +20,17 @@ class ConversationApiTests(unittest.TestCase):
         self.project_manager.create_project("demo")
         self.conversation_manager = ConversationManager(self.project_manager)
 
+        sys.modules.pop("app", None)
+        sys.modules.pop("config", None)
+        sys.modules.pop("backend.rag.pipeline", None)
+        sys.modules.pop("backend.rag.chunker", None)
+        sys.modules.pop("backend.rag.embeddings", None)
+        sys.modules.pop("backend.rag.llm_client", None)
+        sys.modules.pop("backend.rag.markdown_processor", None)
+        sys.modules.pop("backend.rag.milvus_store", None)
+        sys.modules.pop("backend.rag.mineru_parser", None)
+        sys.modules.pop("backend.rag.followup_resolver", None)
+        sys.modules.pop("backend.rag.retriever", None)
         self.app_module = importlib.import_module("app")
         self.app_module.project_manager = self.project_manager
         self.app_module.conversation_manager = self.conversation_manager
