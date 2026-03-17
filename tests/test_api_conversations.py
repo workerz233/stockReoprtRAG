@@ -24,12 +24,14 @@ class ConversationApiTests(unittest.TestCase):
         sys.modules.pop("config", None)
         sys.modules.pop("backend.rag.pipeline", None)
         sys.modules.pop("backend.rag.chunker", None)
+        sys.modules.pop("backend.rag.clarification_generator", None)
         sys.modules.pop("backend.rag.embeddings", None)
+        sys.modules.pop("backend.rag.intent_router", None)
         sys.modules.pop("backend.rag.llm_client", None)
         sys.modules.pop("backend.rag.markdown_processor", None)
         sys.modules.pop("backend.rag.milvus_store", None)
         sys.modules.pop("backend.rag.mineru_parser", None)
-        sys.modules.pop("backend.rag.followup_resolver", None)
+        sys.modules.pop("backend.rag.query_rewriter", None)
         sys.modules.pop("backend.rag.retriever", None)
         self.app_module = importlib.import_module("app")
         self.app_module.project_manager = self.project_manager
@@ -89,6 +91,30 @@ class ConversationApiTests(unittest.TestCase):
         self.assertIn("event: done", response.text)
         self.assertIn('"sources"', response.text)
         self.assertIn('"resolved_query": "华泰证券对存储行业2025年景气度的判断是什么？"', response.text)
+
+    def test_chat_returns_chitchat_events_without_resolved_query(self) -> None:
+        async def fake_stream_answer_question(project_name: str, query: str, conversation_id: str | None = None):
+            self.assertEqual(project_name, "demo")
+            self.assertEqual(query, "你好")
+            self.assertIsNone(conversation_id)
+            yield {"type": "start", "conversation_id": "conv-stream"}
+            yield {"type": "token", "delta": "你好"}
+            yield {
+                "type": "done",
+                "conversation_id": "conv-stream",
+                "answer": "你好，有什么想一起看的吗？",
+                "resolved_query": None,
+                "sources": [],
+            }
+
+        self.app_module.pipeline = types.SimpleNamespace(stream_answer_question=fake_stream_answer_question)
+
+        response = self.client.post("/api/projects/demo/chat", json={"query": "你好"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: token", response.text)
+        self.assertIn('"resolved_query": null', response.text)
+        self.assertIn('"sources": []', response.text)
 
     def test_chat_returns_clarification_events(self) -> None:
         async def fake_stream_answer_question(project_name: str, query: str, conversation_id: str | None = None):

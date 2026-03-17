@@ -11,12 +11,14 @@ from pathlib import Path
 from backend.conversation_manager import ConversationManager
 from backend.project_manager import ProjectManager
 from backend.rag.chunker import DocumentChunker
+from backend.rag.clarification_generator import ClarificationGenerator
 from backend.rag.embeddings import OllamaEmbeddingClient
-from backend.rag.followup_resolver import FollowupResolver
+from backend.rag.intent_router import IntentRouter
 from backend.rag.llm_client import LLMClient
 from backend.rag.markdown_processor import MarkdownProcessor
 from backend.rag.milvus_store import MilvusStore
 from backend.rag.mineru_parser import MinerUParser
+from backend.rag.query_rewriter import QueryRewriter
 from backend.rag.retriever import MilvusRetriever
 from config import get_settings
 
@@ -42,6 +44,18 @@ PROMPT_TEMPLATE = """你将收到若干条检索证据。你必须严格遵守�
 请用中文回答。
 """
 
+HISTORY_RESPONSE_SYSTEM_PROMPT = """你是一个严谨的多轮对话助手。
+你将收到当前会话的历史对话和用户当前问题。
+你必须严格遵守以下规则：
+1. 只能基于“历史对话”回答，不能补充历史对话里没有出现的事实。
+2. 如果历史对话不足以支持回答，必须直接回答：未找到足够依据。
+3. 回答尽量简洁、事实化，优先总结历史对话中已经明确给出的结论。
+"""
+
+CHITCHAT_SYSTEM_PROMPT = """你是一个友好的中文助手。
+当前请求被识别为闲聊，不要调用检索证据，也不要假装引用研报内容。
+直接自然回答即可，保持简洁。"""
+
 
 class ResearchRAGPipeline:
     """Coordinate report parsing, vectorization, retrieval, and answer generation."""
@@ -60,7 +74,9 @@ class ResearchRAGPipeline:
         self.embedding_client = OllamaEmbeddingClient(self.settings)
         self.retriever = MilvusRetriever(project_manager, self.embedding_client)
         self.llm_client = LLMClient(self.settings)
-        self.followup_resolver = FollowupResolver(llm_client=self.llm_client, settings=self.settings)
+        self.intent_router = IntentRouter(settings=self.settings)
+        self.query_rewriter = QueryRewriter(llm_client=self.llm_client, settings=self.settings)
+        self.clarification_generator = ClarificationGenerator(llm_client=self.llm_client, settings=self.settings)
 
     def index_pdf(self, project_name: str, pdf_path: Path) -> dict[str, object]:
         """Parse and index a PDF into the project's Milvus Lite store."""
@@ -111,10 +127,10 @@ class ResearchRAGPipeline:
 
         conversation_id = self._resolve_conversation_id(project_name, conversation_id)
         history_messages = self._build_history_messages(project_name, conversation_id)
-        resolution = self.followup_resolver.resolve(query=query, history_messages=history_messages)
+        decision = self.intent_router.route(query=query, history_messages=history_messages)
 
-        if resolution.needs_clarification:
-            answer = resolution.clarification_question or "我需要确认一下你指的是哪个主题。"
+        if decision.route_name == "clarification":
+            answer = self.clarification_generator.generate(query=query, history_messages=history_messages)
             sources: list[dict[str, object]] = []
             self._persist_conversation_turn(
                 project_name=project_name,
@@ -130,14 +146,57 @@ class ResearchRAGPipeline:
                 "resolved_query": None,
                 "clarification": {
                     "question": answer,
-                    "reason": resolution.reason,
+                    "reason": decision.reason,
                 },
             }
             if conversation_id:
                 response["conversation_id"] = conversation_id
             return response
 
-        retrieval_query = resolution.resolved_query or query
+        if decision.route_name == "history_qa":
+            answer = self._answer_from_history(query=query, history_messages=history_messages)
+            sources = []
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            response = {
+                "type": "answer",
+                "answer": answer,
+                "sources": sources,
+                "resolved_query": None,
+            }
+            if conversation_id:
+                response["conversation_id"] = conversation_id
+            return response
+
+        if decision.route_name == "chitchat":
+            answer = self._answer_chitchat(query=query, history_messages=history_messages)
+            sources = []
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            response = {
+                "type": "answer",
+                "answer": answer,
+                "sources": sources,
+                "resolved_query": None,
+            }
+            if conversation_id:
+                response["conversation_id"] = conversation_id
+            return response
+
+        retrieval_query = query
+        if decision.route_name == "history_rewrite_retrieval":
+            retrieval_query = self.query_rewriter.rewrite(query=query, history_messages=history_messages)
+
         results = self.retriever.retrieve(project_name=project_name, query=retrieval_query)
         if not results:
             answer = "当前项目中还没有可检索内容，请先上传并索引研报 PDF。"
@@ -182,9 +241,9 @@ class ResearchRAGPipeline:
         yield {"type": "start", "conversation_id": conversation_id}
 
         history_messages = self._build_history_messages(project_name, conversation_id)
-        resolution = self.followup_resolver.resolve(query=query, history_messages=history_messages)
-        if resolution.needs_clarification:
-            answer = resolution.clarification_question or "我需要确认一下你指的是哪个主题。"
+        decision = self.intent_router.route(query=query, history_messages=history_messages)
+        if decision.route_name == "clarification":
+            answer = self.clarification_generator.generate(query=query, history_messages=history_messages)
             sources: list[dict[str, object]] = []
             self._persist_conversation_turn(
                 project_name=project_name,
@@ -200,10 +259,65 @@ class ResearchRAGPipeline:
                 "sources": sources,
                 "conversation_id": conversation_id,
                 "resolved_query": None,
+                "clarification": {
+                    "question": answer,
+                    "reason": decision.reason,
+                },
             }
             return
 
-        retrieval_query = resolution.resolved_query or query
+        if decision.route_name == "history_qa":
+            sources: list[dict[str, object]] = []
+            chunks: list[str] = []
+            async for delta in self._stream_answer_from_history(query=query, history_messages=history_messages):
+                chunks.append(delta)
+                yield {"type": "token", "delta": delta, "conversation_id": conversation_id}
+
+            answer = self._strip_source_section("".join(chunks)) or "未生成有效回答。"
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            yield {
+                "type": "done",
+                "answer": answer,
+                "sources": sources,
+                "conversation_id": conversation_id,
+                "resolved_query": None,
+            }
+            return
+
+        if decision.route_name == "chitchat":
+            sources = []
+            chunks: list[str] = []
+            async for delta in self._stream_chitchat(query=query, history_messages=history_messages):
+                chunks.append(delta)
+                yield {"type": "token", "delta": delta, "conversation_id": conversation_id}
+
+            answer = self._strip_source_section("".join(chunks)) or "未生成有效回答。"
+            self._persist_conversation_turn(
+                project_name=project_name,
+                conversation_id=conversation_id,
+                query=query,
+                answer=answer,
+                sources=sources,
+            )
+            yield {
+                "type": "done",
+                "answer": answer,
+                "sources": sources,
+                "conversation_id": conversation_id,
+                "resolved_query": None,
+            }
+            return
+
+        retrieval_query = query
+        if decision.route_name == "history_rewrite_retrieval":
+            retrieval_query = self.query_rewriter.rewrite(query=query, history_messages=history_messages)
+
         results = self.retriever.retrieve(project_name=project_name, query=retrieval_query)
         sources = self._build_sources(results)
         if not results:
@@ -310,6 +424,63 @@ class ResearchRAGPipeline:
             if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
                 history_messages.append({"role": role, "content": content})
         return history_messages
+
+    def _answer_from_history(self, query: str, history_messages: list[dict[str, str]]) -> str:
+        if not history_messages:
+            return "当前还没有可供参考的历史对话。"
+
+        return self._strip_source_section(
+            self.llm_client.answer_messages(
+                [
+                    *history_messages,
+                    {"role": "user", "content": query},
+                ],
+                system_prompt=HISTORY_RESPONSE_SYSTEM_PROMPT,
+            )
+        )
+
+    async def _stream_answer_from_history(
+        self,
+        query: str,
+        history_messages: list[dict[str, str]],
+    ) -> AsyncIterator[str]:
+        if not history_messages:
+            yield "当前还没有可供参考的历史对话。"
+            return
+
+        async for delta in self.llm_client.stream_answer_messages(
+            [
+                *history_messages,
+                {"role": "user", "content": query},
+            ],
+            system_prompt=HISTORY_RESPONSE_SYSTEM_PROMPT,
+        ):
+            yield delta
+
+    def _answer_chitchat(self, query: str, history_messages: list[dict[str, str]]) -> str:
+        return self._strip_source_section(
+            self.llm_client.answer_messages(
+                [
+                    *history_messages,
+                    {"role": "user", "content": query},
+                ],
+                system_prompt=CHITCHAT_SYSTEM_PROMPT,
+            )
+        )
+
+    async def _stream_chitchat(
+        self,
+        query: str,
+        history_messages: list[dict[str, str]],
+    ) -> AsyncIterator[str]:
+        async for delta in self.llm_client.stream_answer_messages(
+            [
+                *history_messages,
+                {"role": "user", "content": query},
+            ],
+            system_prompt=CHITCHAT_SYSTEM_PROMPT,
+        ):
+            yield delta
 
     def _build_prompt(self, query: str, results: list[object]) -> str:
         context = "\n\n".join(

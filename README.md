@@ -61,7 +61,7 @@ LLM_API_KEY=your_api_key
 
 - `BASE_URL` 必须是 OpenAI 兼容服务的根地址，通常形如 `http://host:port/v1`
 - `MODEL_NAME` 是最终基于检索证据生成回答时使用的主模型
-- `FAST_MODEL_NAME` 是检索前追问识别、指代补全和澄清判断使用的快模型；未配置时默认回退到 `MODEL_NAME`
+- `FAST_MODEL_NAME` 是语义路由后的查询改写与澄清追问使用的快模型；未配置时默认回退到 `MODEL_NAME`
 - `LLM_API_KEY` 用于远端 OpenAI 兼容服务鉴权；如果你使用本地服务，可以不填，代码会自动回退到 `EMPTY`
 - 代码中使用 `python-dotenv` 自动读取 `.env`
 
@@ -112,13 +112,25 @@ python app.py
 
 系统会只基于当前项目中已索引的研报内容回答。
 
-对于连续追问，系统会在检索前先尝试识别是否依赖最近几轮上下文，例如：
+聊天入口现在会先经过 `semantic-router` 语义路由，再进入不同执行链路：
+
+- `chitchat`：闲聊，直接走主 LLM，不检索
+- `history_qa`：只基于当前会话历史回答
+- `history_rewrite_retrieval`：结合历史改写问题后再检索
+- `direct_retrieval`：当前问题足够独立，直接检索
+- `clarification`：信息不足，直接追问澄清
+
+对于依赖上下文的连续追问，例如：
 
 - `那 2025 年呢？`
 - `它的毛利率呢？`
 - `和另一篇比呢？`
 
-高置信度时会先把问题补全成可独立检索的完整问题，再进入检索；如果系统认为指代不清，会先返回澄清问题，而不是直接误检索。
+系统会先由语义路由判断是“可改写后检索”还是“需要先澄清”。前者会先补全成独立检索问题，再进入检索；后者会直接返回追问，避免误检索。
+
+路由样本配置位于：
+
+`config/semantic_routes.json`
 
 当前聊天接口使用 SSE 流式返回。正常回答时，最终 `done` 事件会带上 `resolved_query` 和 `sources`；如果进入澄清分支，最终事件会带空 `sources`，并在 `clarification` 字段中说明澄清问题和原因。
 
