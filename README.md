@@ -170,6 +170,46 @@ python app.py
 
 `evals/results/<timestamp>.json`
 
+## 9. RAGAS 评测
+
+项目现在还提供一套独立于 `evals/` 的 RAGAS 评测入口，目录位于 `ragas_eval/`，不会复用旧的启发式评测代码。
+
+先只生成数据集：
+
+```bash
+python -m ragas_eval.runner --generate-only
+```
+
+默认会扫描：
+
+`data/projects/*/parsed_markdown/**/*.md`
+
+生成：
+
+`ragas_eval/datasets/auto_cases.jsonl`
+
+执行完整 RAGAS 评测：
+
+```bash
+python -m ragas_eval.runner --dataset ragas_eval/datasets/auto_cases.jsonl
+```
+
+评测输出固定包含两组指标：
+
+- RAGAS 4 指标：`context_precision`、`context_recall`、`faithfulness`、`answer_relevancy`
+- 工程 4 指标：`Recall`、`Accuracy`、`F1-score`、`Response Speed`
+
+结果会写入：
+
+- `ragas_eval/results/<timestamp>/summary.json`
+- `ragas_eval/results/<timestamp>/cases.jsonl`
+
+说明：
+
+- 新评测直接调用真实 `ResearchRAGPipeline`
+- 样本从 `parsed_markdown` 自动筛选并补充 followup / refusal 样本
+- 若缺少 `ragas`、`datasets` 或 `langchain-openai`，命令会直接报错，不会回退到旧 `evals/`
+
 ## 目录结构
 
 ```text
