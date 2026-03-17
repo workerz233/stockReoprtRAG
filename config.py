@@ -48,6 +48,7 @@ class Settings:
 
     base_url: str
     model_name: str
+    fast_model_name: str | None = None
     api_key: str | None = None
     embedding_model: str = "qwen3-embedding:0.6b"
     embedding_url: str = "http://localhost:11434/api/embeddings"
@@ -72,6 +73,7 @@ def get_settings() -> Settings:
     return Settings(
         base_url=base_url,
         model_name=model_name,
+        fast_model_name=_normalize_optional_env(os.getenv("FAST_MODEL_NAME")) or model_name,
         api_key=api_key if api_key else ("EMPTY" if _is_local_base_url(base_url) else None),
         conversation_history_messages=max(0, int(os.getenv("CONVERSATION_HISTORY_MESSAGES", "8"))),
     )

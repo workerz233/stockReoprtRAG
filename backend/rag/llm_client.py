@@ -44,6 +44,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         *,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        model_name: str | None = None,
     ) -> str:
         """Generate an answer for a multi-turn message list."""
         if not self.settings.api_key and not self._is_local_endpoint():
@@ -51,9 +52,10 @@ class LLMClient:
                 "LLM API key is missing. Set `LLM_API_KEY` "
                 "(or `OPENAI_API_KEY` / `ZHIZENGZENG_API_KEY`) in your environment or `.env`."
             )
+        selected_model = model_name or self.settings.model_name
         try:
             response = self.client.chat.completions.create(
-                model=self.settings.model_name,
+                model=selected_model,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
                 temperature=0.2,
             )

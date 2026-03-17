@@ -102,6 +102,23 @@ class LLMClientTests(unittest.TestCase):
             {"role": "user", "content": "第二问"},
         ])
 
+    def test_answer_messages_allows_model_override(self) -> None:
+        settings = self.module.Settings(
+            base_url="http://localhost:8001/v1",
+            model_name="main-model",
+            fast_model_name="fast-model",
+            api_key="token",
+        )
+        client = self.module.LLMClient(settings=settings)
+
+        answer = client.answer_messages(
+            [{"role": "user", "content": "测试问题"}],
+            model_name="fast-model",
+        )
+
+        self.assertEqual(answer, "好的回答")
+        self.assertEqual(client.client.chat.completions.last_kwargs["model"], "fast-model")
+
     def test_stream_answer_messages_yields_content_chunks(self) -> None:
         client = self.module.LLMClient(settings=self.settings)
 
