@@ -101,6 +101,52 @@ class FollowupResolverTests(unittest.TestCase):
         self.assertTrue(result.needs_clarification)
         self.assertEqual(result.clarification_question, "你指的是华泰证券还是华西证券这篇报告？")
 
+    def test_invalid_json_falls_back_to_non_followup(self) -> None:
+        resolver = self.module.FollowupResolver(
+            llm_client=FakeLLMClient("not-json"),
+            settings=self.settings,
+        )
+
+        result = resolver.resolve(
+            "那它呢",
+            history_messages=[
+                {"role": "user", "content": "华泰证券怎么看存储？"},
+                {"role": "assistant", "content": "华泰证券认为行业景气度回升。"},
+            ],
+        )
+
+        self.assertFalse(result.is_followup)
+        self.assertEqual(result.resolved_query, "那它呢")
+        self.assertFalse(result.needs_clarification)
+
+    def test_mid_confidence_requires_rule_hit_to_auto_resolve(self) -> None:
+        llm_client = FakeLLMClient(
+            json.dumps(
+                {
+                    "is_followup": True,
+                    "resolved_query": "华泰证券对存储行业2025年景气度的判断是什么？",
+                    "confidence": 0.65,
+                    "needs_clarification": False,
+                    "clarification_question": "",
+                    "reason": "时间被省略，依赖上一轮主题。",
+                },
+                ensure_ascii=False,
+            )
+        )
+        resolver = self.module.FollowupResolver(llm_client=llm_client, settings=self.settings)
+
+        result = resolver.resolve(
+            "那2025年呢",
+            history_messages=[
+                {"role": "user", "content": "华泰证券怎么判断存储行业景气度？"},
+                {"role": "assistant", "content": "华泰证券认为行业景气度正在恢复。"},
+            ],
+        )
+
+        self.assertTrue(result.is_followup)
+        self.assertEqual(result.resolved_query, "华泰证券对存储行业2025年景气度的判断是什么？")
+        self.assertFalse(result.needs_clarification)
+
 
 if __name__ == "__main__":
     unittest.main()

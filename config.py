@@ -57,6 +57,8 @@ class Settings:
     top_k: int = 10
     milvus_db_name: str = "milvus.db"
     conversation_history_messages: int = 8
+    followup_history_turns: int = 4
+    followup_confidence_threshold: float = 0.8
 
 
 @lru_cache(maxsize=1)
@@ -76,6 +78,8 @@ def get_settings() -> Settings:
         fast_model_name=_normalize_optional_env(os.getenv("FAST_MODEL_NAME")) or model_name,
         api_key=api_key if api_key else ("EMPTY" if _is_local_base_url(base_url) else None),
         conversation_history_messages=max(0, int(os.getenv("CONVERSATION_HISTORY_MESSAGES", "8"))),
+        followup_history_turns=max(0, int(os.getenv("FOLLOWUP_HISTORY_TURNS", "4"))),
+        followup_confidence_threshold=float(os.getenv("FOLLOWUP_CONFIDENCE_THRESHOLD", "0.8")),
     )
 
 

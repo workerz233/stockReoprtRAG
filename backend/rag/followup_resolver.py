@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from config import Settings, get_settings
@@ -75,8 +76,12 @@ class FollowupResolver:
             system_prompt=FOLLOWUP_SYSTEM_PROMPT,
             model_name=getattr(self.settings, "fast_model_name", None),
         )
-        parsed = json.loads(payload)
-        return FollowupResolution(
+        try:
+            parsed = json.loads(payload)
+        except (TypeError, ValueError):
+            return self._build_passthrough_resolution(query=query, reason="快模型输出无法解析。")
+
+        resolution = FollowupResolution(
             original_query=query,
             resolved_query=parsed.get("resolved_query") or query,
             is_followup=bool(parsed.get("is_followup")),
@@ -85,3 +90,55 @@ class FollowupResolver:
             clarification_question=parsed.get("clarification_question") or None,
             reason=str(parsed.get("reason") or ""),
         )
+        return self._apply_thresholds(query=query, resolution=resolution)
+
+    @staticmethod
+    def _build_passthrough_resolution(query: str, reason: str) -> FollowupResolution:
+        return FollowupResolution(
+            original_query=query,
+            resolved_query=query,
+            is_followup=False,
+            confidence=0.0,
+            needs_clarification=False,
+            clarification_question=None,
+            reason=reason,
+        )
+
+    def _apply_thresholds(self, query: str, resolution: FollowupResolution) -> FollowupResolution:
+        if not resolution.is_followup:
+            return self._build_passthrough_resolution(query=query, reason=resolution.reason or "问题可独立理解。")
+
+        if resolution.needs_clarification:
+            return resolution
+
+        threshold = float(getattr(self.settings, "followup_confidence_threshold", 0.8))
+        if resolution.confidence >= threshold:
+            return resolution
+
+        if resolution.confidence >= 0.5 and self._has_strong_followup_signal(query):
+            return resolution
+
+        return FollowupResolution(
+            original_query=query,
+            resolved_query=None,
+            is_followup=True,
+            confidence=resolution.confidence,
+            needs_clarification=True,
+            clarification_question=(
+                resolution.clarification_question
+                or "我需要确认一下，你这句话是在延续上一轮哪个主题？"
+            ),
+            reason=resolution.reason or "追问置信度不足，需要澄清。",
+        )
+
+    @staticmethod
+    def _has_strong_followup_signal(query: str) -> bool:
+        patterns = (
+            r"^那.+呢[？?]?$",
+            r"^那\d{4}年呢[？?]?$",
+            r"^它的.+呢[？?]?$",
+            r"^(这个|那个).+呢[？?]?$",
+            r"和另一篇比",
+            r"上面提到的",
+        )
+        return any(re.search(pattern, query) for pattern in patterns)
