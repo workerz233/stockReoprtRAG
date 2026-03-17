@@ -53,6 +53,7 @@ class ConversationApiTests(unittest.TestCase):
                 "type": "done",
                 "conversation_id": "conv-stream",
                 "answer": "基于证据的回答",
+                "resolved_query": "华泰证券对存储行业2025年景气度的判断是什么？",
                 "sources": [
                     {
                         "report_name": "demo.pdf",
@@ -75,6 +76,35 @@ class ConversationApiTests(unittest.TestCase):
         self.assertIn("event: token", response.text)
         self.assertIn("event: done", response.text)
         self.assertIn('"sources"', response.text)
+        self.assertIn('"resolved_query": "华泰证券对存储行业2025年景气度的判断是什么？"', response.text)
+
+    def test_chat_returns_clarification_events(self) -> None:
+        async def fake_stream_answer_question(project_name: str, query: str, conversation_id: str | None = None):
+            self.assertEqual(project_name, "demo")
+            self.assertEqual(query, "它的毛利率呢")
+            self.assertIsNone(conversation_id)
+            yield {"type": "start", "conversation_id": "conv-stream"}
+            yield {"type": "delta", "delta": "你指的是华泰证券还是华西证券这篇报告？"}
+            yield {
+                "type": "done",
+                "conversation_id": "conv-stream",
+                "answer": "你指的是华泰证券还是华西证券这篇报告？",
+                "resolved_query": None,
+                "sources": [],
+                "clarification": {
+                    "question": "你指的是华泰证券还是华西证券这篇报告？",
+                    "reason": "存在多个候选主体。",
+                },
+            }
+
+        self.app_module.pipeline = types.SimpleNamespace(stream_answer_question=fake_stream_answer_question)
+
+        response = self.client.post("/api/projects/demo/chat", json={"query": "它的毛利率呢"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: delta", response.text)
+        self.assertIn('"resolved_query": null', response.text)
+        self.assertIn('"clarification"', response.text)
 
 
 if __name__ == "__main__":
