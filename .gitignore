@@ -1,1 +1,6 @@
 .worktrees/
+ragas_eval/__pycache__/
+ragas_eval/datasets/*.jsonl
+ragas_eval/results/*
+!ragas_eval/datasets/.gitkeep
+!ragas_eval/results/.gitkeep
