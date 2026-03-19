@@ -9,15 +9,21 @@
 __pycache__/
 *.pyc
 
+docs/
 data/projects/*
 !data/projects/.gitkeep
 
+eval.sh
+evals/
 evals/datasets/*.jsonl
 evals/results/*
 !evals/results/.gitkeep
 
+ragas_eval/
 ragas_eval/__pycache__/
 ragas_eval/datasets/*.jsonl
 ragas_eval/results/*
 !ragas_eval/datasets/.gitkeep
 !ragas_eval/results/.gitkeep
+
+test.sh
