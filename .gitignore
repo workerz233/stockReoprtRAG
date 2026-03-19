@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.zzzenv
 .pytest_cache/
 .venv/
 .worktrees/
@@ -11,6 +12,7 @@ __pycache__/
 data/projects/*
 !data/projects/.gitkeep
 
+evals/datasets/*.jsonl
 evals/results/*
 !evals/results/.gitkeep
 
