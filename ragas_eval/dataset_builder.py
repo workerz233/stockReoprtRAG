@@ -15,10 +15,26 @@ LOW_SIGNAL_PATTERNS = (
     "分析师",
     "请仔细阅读",
     "法律声明",
+    "资料来源",
+    "风险提示",
 )
 NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?(?:%|亿元|亿美元|万片/月|美元|倍|EB)")
-LIST_PATTERN = re.compile(r"(?:重点推荐|推荐|受益标的)[：:\s]*([^。；\n]+)")
+LIST_PATTERN = re.compile(r"(?:^|[\n。；：:])\s*(?:重点推荐|推荐|受益标的)[：:\s]*([^。；\n]+)")
 SPLIT_PATTERN = re.compile(r"[、，,；;]\s*")
+PAGE_PATTERN = re.compile(r"第\s*(\d+)\s*页")
+ANCHOR_BAD_PATTERNS = (
+    "资料来源",
+    "风险提示",
+    "股票名称",
+    "股票代码",
+    "目标价",
+    "投资评级",
+)
+LIST_BAD_PATTERNS = ANCHOR_BAD_PATTERNS + (
+    "或覆盖",
+    "未覆盖",
+    "推荐或覆盖",
+)
 
 
 def build_dataset(
@@ -99,24 +115,33 @@ def _build_positive_samples(project_name: str, report_name: str, blocks: list[tu
         if _is_low_signal(section_path, text):
             continue
 
-        if NUMBER_PATTERN.search(text):
+        fact_question = _build_factoid_question(text)
+        answer_points = _extract_fact_points(text)
+        if fact_question and answer_points:
+            answer_points = _extract_fact_points(text)
             samples.append(
                 EvalSample(
                     case_id=f"{project_name}-{report_name}-{index}-factoid",
                     project_name=project_name,
                     report_name=report_name,
                     section_path=section_path,
-                    question=f"报告在“{section_path}”里提到了哪些关键数据？",
+                    question=fact_question,
                     ground_truth=text,
                     reference_contexts=[text],
-                    expected_source_keys=[f"{report_name}|{section_path}"],
+                    expected_source_keys=_build_expected_source_keys(report_name, section_path),
                     case_type="factoid",
+                    expected_answer_points=answer_points,
                 )
             )
 
         list_match = LIST_PATTERN.search(text)
         if list_match:
-            items = [token.strip() for token in SPLIT_PATTERN.split(list_match.group(1)) if token.strip()]
+            items = [
+                token.strip()
+                for token in SPLIT_PATTERN.split(list_match.group(1))
+                if _is_valid_list_item(token.strip())
+            ]
+            list_question = _build_list_question(text)
             if items:
                 samples.append(
                     EvalSample(
@@ -124,11 +149,12 @@ def _build_positive_samples(project_name: str, report_name: str, blocks: list[tu
                         project_name=project_name,
                         report_name=report_name,
                         section_path=section_path,
-                        question=f"报告在“{section_path}”部分推荐了哪些标的？",
+                        question=list_question or "报告中的投资建议推荐了哪些标的？",
                         ground_truth="、".join(items),
                         reference_contexts=[text],
-                        expected_source_keys=[f"{report_name}|{section_path}"],
+                        expected_source_keys=_build_expected_source_keys(report_name, section_path),
                         case_type="list",
+                        expected_answer_points=items,
                     )
                 )
     return samples
@@ -151,6 +177,7 @@ def _supplement_followups(samples: list[EvalSample], min_positive_per_report: in
                 reference_contexts=list(source.reference_contexts),
                 expected_source_keys=list(source.expected_source_keys),
                 case_type="followup",
+                expected_answer_points=list(source.expected_answer_points),
             )
         )
         cursor += 1
@@ -193,4 +220,110 @@ def _build_refusal_samples(
 
 def _is_low_signal(section_path: str, text: str) -> bool:
     combined = f"{section_path}\n{text}"
-    return any(pattern in combined for pattern in LOW_SIGNAL_PATTERNS)
+    if any(pattern in combined for pattern in LOW_SIGNAL_PATTERNS):
+        return True
+    if _looks_like_axis_or_table_noise(text):
+        return True
+    return False
+
+
+def _build_expected_source_keys(report_name: str, section_path: str) -> list[str]:
+    page_no = _extract_page_number(section_path)
+    if page_no is not None:
+        return [f"{report_name}|page:{page_no}"]
+    semantic_section = _strip_page_headings(section_path)
+    if semantic_section:
+        return [f"{report_name}|{semantic_section}"]
+    return [f"{report_name}|{section_path}"]
+
+
+def _extract_page_number(section_path: str) -> int | None:
+    match = PAGE_PATTERN.search(section_path)
+    return int(match.group(1)) if match else None
+
+
+def _strip_page_headings(section_path: str) -> str:
+    parts = [part.strip() for part in section_path.split(">")]
+    filtered = [part for part in parts if part and not PAGE_PATTERN.fullmatch(part)]
+    if len(filtered) >= 2:
+        return " > ".join(filtered[1:])
+    if filtered:
+        return filtered[-1]
+    return ""
+
+
+def _build_factoid_question(text: str) -> str:
+    anchor = _extract_anchor(text, drop_numbers=True)
+    if anchor:
+        return f"报告中关于“{anchor}”的关键数据是什么？"
+    return ""
+
+
+def _build_list_question(text: str) -> str:
+    anchor = _extract_anchor(text, drop_numbers=False)
+    if anchor:
+        return f"报告中关于“{anchor}”推荐了哪些标的？"
+    return ""
+
+
+def _extract_anchor(text: str, *, drop_numbers: bool) -> str:
+    sentence = re.split(r"[。；\n]", text.strip(), maxsplit=1)[0].strip()
+    sentence = re.sub(r"^(重点推荐|推荐|受益标的)[：:\s]*", "", sentence)
+    if drop_numbers:
+        sentence = NUMBER_PATTERN.sub("", sentence)
+    sentence = re.sub(r"\s+", "", sentence).strip("：:，,、；;。")
+    if len(sentence) < 6:
+        return ""
+    if any(pattern in sentence for pattern in ANCHOR_BAD_PATTERNS):
+        return ""
+    if re.fullmatch(r"[-+0-9.%]+", sentence):
+        return ""
+    return sentence[:18]
+
+
+def _extract_fact_points(text: str) -> list[str]:
+    points: list[str] = []
+    for sentence in re.split(r"[。；\n]", text):
+        normalized = sentence.strip()
+        if not normalized:
+            continue
+        if any(pattern in normalized for pattern in LOW_SIGNAL_PATTERNS):
+            continue
+        if _looks_like_axis_or_table_noise(normalized):
+            continue
+        tokens = NUMBER_PATTERN.findall(normalized)
+        if not tokens:
+            continue
+        if len(re.findall(r"[\u4e00-\u9fffA-Za-z]", normalized)) < 6:
+            continue
+        for token in tokens:
+            if token in {"0%", "20%", "40%", "60%", "80%", "100%"} and len(tokens) >= 5:
+                continue
+            if token not in points:
+                points.append(token)
+            if len(points) >= 3:
+                return points
+    return points
+
+
+def _looks_like_axis_or_table_noise(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    if not normalized:
+        return True
+    if re.fullmatch(r"[0-9.%+\- ]+", normalized):
+        return True
+    if sum(1 for _ in NUMBER_PATTERN.finditer(normalized)) >= 5 and len(re.findall(r"[\u4e00-\u9fffA-Za-z]", normalized)) < 8:
+        return True
+    return False
+
+
+def _is_valid_list_item(item: str) -> bool:
+    if not item or len(item) < 2:
+        return False
+    if any(pattern in item for pattern in LIST_BAD_PATTERNS):
+        return False
+    if re.fullmatch(r"[A-Za-z0-9()./ -]+", item):
+        return False
+    if len(re.findall(r"[\u4e00-\u9fffA-Za-z]", item)) < 2:
+        return False
+    return True

@@ -29,6 +29,22 @@ const newConversationBtnEl = document.getElementById("newConversationBtn");
 const chatMessagesEl = document.getElementById("chatMessages");
 const chatInputEl = document.getElementById("chatInput");
 const sendChatBtnEl = document.getElementById("sendChatBtn");
+const syncComposerState =
+  window.chatComposerState?.syncChatComposerState ||
+  ((currentState, elements) => {
+    const query = String(elements.chatInputEl?.value || "").trim();
+    const hasActiveProject = Boolean(currentState.activeProject);
+    const isSendingMessage = Boolean(currentState.isSendingMessage);
+
+    elements.chatInputEl.disabled = isSendingMessage;
+    elements.sendChatBtnEl.disabled = isSendingMessage || !hasActiveProject || !query;
+    elements.sendChatBtnEl.textContent = isSendingMessage ? "发送中..." : "发送";
+  });
+const consumeSseStream =
+  window.chatSse?.consumeSseStream ||
+  (async () => {
+    throw new Error("SSE helper 未加载");
+  });
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -46,6 +62,10 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderChatComposer() {
+  syncComposerState(state, { chatInputEl, sendChatBtnEl });
 }
 
 function renderUploadPanelVisibility() {
@@ -374,6 +394,7 @@ async function setActiveProject(projectName) {
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
+  renderChatComposer();
 
   if (!projectName) {
     return;
@@ -437,71 +458,6 @@ async function readErrorResponse(response) {
   return text || "请求失败";
 }
 
-function parseSseEventBlock(block) {
-  const lines = block.split(/\r?\n/);
-  let eventName = "message";
-  const dataLines = [];
-
-  lines.forEach((line) => {
-    if (line.startsWith("event:")) {
-      eventName = line.slice(6).trim() || "message";
-      return;
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  });
-
-  if (!dataLines.length) {
-    return null;
-  }
-
-  return {
-    event: eventName,
-    data: JSON.parse(dataLines.join("\n")),
-  };
-}
-
-async function consumeSseStream(response, handlers) {
-  if (!response.body) {
-    throw new Error("浏览器不支持流式响应");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() || "";
-
-    blocks.forEach((block) => {
-      const parsed = parseSseEventBlock(block);
-      if (!parsed) {
-        return;
-      }
-
-      const handler = handlers[parsed.event];
-      if (handler) {
-        handler(parsed.data);
-      }
-    });
-
-    if (done) {
-      if (buffer.trim()) {
-        const parsed = parseSseEventBlock(buffer);
-        if (parsed && handlers[parsed.event]) {
-          handlers[parsed.event](parsed.data);
-        }
-      }
-      return;
-    }
-  }
-}
-
 async function loadProjects() {
   const data = await requestJson("/api/projects");
   state.projects = data.projects || [];
@@ -528,6 +484,7 @@ function clearProjectSelection() {
   renderProjects();
   renderConversations();
   renderConversationMessages([]);
+  renderChatComposer();
 }
 
 async function createProject() {
@@ -732,12 +689,14 @@ async function sendMessage() {
   }
 
   if (!state.activeProject) {
+    renderChatComposer();
     alert("请先选择项目");
     return;
   }
 
   const query = chatInputEl.value.trim();
   if (!query) {
+    renderChatComposer();
     return;
   }
 
@@ -758,7 +717,7 @@ async function sendMessage() {
   let assistantText = "";
   let finalPayload = null;
   state.isSendingMessage = true;
-  sendChatBtnEl.disabled = true;
+  renderChatComposer();
 
   try {
     const response = await fetch(
@@ -811,7 +770,7 @@ async function sendMessage() {
     }
   } finally {
     state.isSendingMessage = false;
-    sendChatBtnEl.disabled = false;
+    renderChatComposer();
   }
 }
 
@@ -849,9 +808,11 @@ chatInputEl.addEventListener("keydown", (event) => {
     });
   }
 });
+chatInputEl.addEventListener("input", renderChatComposer);
 
 renderUploadPanelVisibility();
 renderConversations();
+renderChatComposer();
 
 loadProjects().catch((error) => {
   appendMessage("assistant", `初始化失败：${error.message}`);

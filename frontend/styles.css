@@ -152,6 +152,12 @@ button:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .ghost-button {
   width: auto;
   padding: 10px 14px;

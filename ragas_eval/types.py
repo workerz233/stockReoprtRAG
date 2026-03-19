@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from dataclasses import field
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class EvalSample:
     expected_source_keys: list[str]
     case_type: str
     should_refuse: bool = False
+    expected_answer_points: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

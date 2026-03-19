@@ -19,18 +19,19 @@ def compute_case_metrics(sample: EvalSample, response: dict[str, object], latenc
     answer = str(response.get("answer", "")).strip()
     sources = response.get("sources", [])
     source_items = [item for item in sources if isinstance(item, dict)] if isinstance(sources, list) else []
-    source_keys = {
-        f"{str(item.get('report_name', '')).strip()}|{str(item.get('section_path', '')).strip()}"
-        for item in source_items
-    }
     expected_keys = set(sample.expected_source_keys)
-    matched_keys = source_keys & expected_keys
+    matched_keys = set()
+    for item in source_items:
+        candidate_keys = _build_source_keys([item])
+        if candidate_keys & expected_keys:
+            matched_keys.update(candidate_keys & expected_keys)
 
-    recall = round(len(matched_keys) / len(expected_keys), 4) if expected_keys else 1.0
-    precision = round(len(matched_keys) / len(source_keys), 4) if source_keys else 0.0
-    f1_score = _compute_f1(precision, recall)
     refusal_detected = _contains_refusal(answer)
-    accuracy = _compute_accuracy(sample, answer, refusal_detected)
+    answer_point_recall = _compute_answer_point_recall(sample, answer)
+    recall = _compute_recall(expected_keys, matched_keys)
+    precision = _compute_precision(sample, refusal_detected, answer_point_recall)
+    f1_score = _compute_f1(precision, recall)
+    accuracy = _compute_accuracy(sample, refusal_detected, answer_point_recall)
 
     return {
         "case_id": sample.case_id,
@@ -38,6 +39,7 @@ def compute_case_metrics(sample: EvalSample, response: dict[str, object], latenc
         "Recall": recall,
         "Precision": precision,
         "F1-score": f1_score,
+        "Answer Point Recall": answer_point_recall,
         "Accuracy": accuracy,
         "latency_ms": round(float(latency_ms), 4),
     }
@@ -80,11 +82,50 @@ def summarize_run(
     }
 
 
-def _compute_accuracy(sample: EvalSample, answer: str, refusal_detected: bool) -> bool:
-    normalized_answer = _normalize_text(answer)
+def _compute_precision(sample: EvalSample, refusal_detected: bool, answer_point_recall: float | None) -> float:
+    if sample.should_refuse:
+        return 1.0 if refusal_detected else 0.0
+    if answer_point_recall is None:
+        return 0.0
+    return round(answer_point_recall, 4)
+
+
+def _compute_recall(expected_keys: set[str], matched_keys: set[str]) -> float:
+    if not expected_keys:
+        return 1.0
+    return round(len(matched_keys) / len(expected_keys), 4)
+
+
+def _compute_accuracy(sample: EvalSample, refusal_detected: bool, answer_point_recall: float | None) -> bool:
     if sample.should_refuse:
         return refusal_detected
-    return bool(sample.ground_truth and _normalize_text(sample.ground_truth) in normalized_answer and not refusal_detected)
+    if answer_point_recall is None:
+        return False
+    return answer_point_recall >= 0.5 and not refusal_detected
+
+
+def _compute_answer_point_recall(sample: EvalSample, answer: str) -> float | None:
+    if sample.should_refuse:
+        return None
+    points = sample.expected_answer_points or ([sample.ground_truth] if sample.ground_truth else [])
+    if not points:
+        return None
+    normalized_answer = _normalize_text(answer)
+    hits = sum(1 for point in points if _normalize_text(point) in normalized_answer)
+    return round(hits / len(points), 4)
+
+
+def _build_source_keys(source_items: list[dict[str, object]]) -> set[str]:
+    keys: set[str] = set()
+    for item in source_items:
+        report_name = str(item.get("report_name", "")).strip()
+        section_path = str(item.get("section_path", "")).strip()
+        page_no = item.get("page_no")
+        if report_name and section_path:
+            keys.add(f"{report_name}|{section_path}")
+        if report_name and isinstance(page_no, int):
+            keys.add(f"{report_name}|page:{page_no}")
+    return keys
 
 
 def _contains_refusal(answer: str) -> bool:
